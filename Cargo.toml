@@ -1,0 +1,13 @@
+[package]
+name = "svn-util"
+version = "0.1.0"
+description = "A tui application to manage the current svn branch"
+authors = ["Ben Jones <fetiddius@gmail.com>"]
+license = "MIT"
+edition = "2024"
+
+[dependencies]
+crossterm = "0.28.1"
+ratatui = "0.29.0"
+color-eyre = "0.6.3"
+chrono = "0.4.40"
