@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use crate::{
+    config::Config,
     event::{AppEvent, Direction, Event, EventHandler},
     svn,
 };
@@ -12,8 +13,6 @@ use ratatui::{
     layout::Rect,
     widgets::{ListState, ScrollbarState},
 };
-
-const SVN_STATUS_TIMEOUT: i64 = 2;
 
 #[derive(Debug)]
 pub struct App {
@@ -38,6 +37,7 @@ pub struct App {
     // UI areas mainly used for mouse clicks etc.
     pub changes_area: Option<Rect>,
     pub conflicts_area: Option<Rect>,
+    pub config: Config,
 }
 
 impl Default for App {
@@ -78,7 +78,12 @@ impl App {
             selected_section: None,
             changes_area: None,
             conflicts_area: None,
+            config: Config::default(),
         }
+    }
+
+    pub fn with_config(self, config: Config) -> Self {
+        Self { config, ..self }
     }
 
     /// Run the application's main loop.
@@ -192,7 +197,7 @@ impl App {
     /// The tick event is where you can update the state of your application with any logic that
     /// needs to be updated at a fixed frame rate. E.g. polling a server, updating an animation.
     fn tick(&mut self) {
-        if is_time_for_update(self.last_updated) {
+        if time_for_update(self.last_updated, self.config.svn_status_timeout) {
             self.events.send(AppEvent::UpdateRequest);
         }
     }
@@ -263,8 +268,8 @@ fn handle_scroll(dir: &Direction, offset: &mut usize, bar_state: &mut ScrollbarS
     *bar_state = bar_state.position(*offset);
 }
 
-fn is_time_for_update(last_updated: DateTime<Utc>) -> bool {
-    Utc::now().signed_duration_since(last_updated).num_seconds() > SVN_STATUS_TIMEOUT
+fn time_for_update(last_updated: DateTime<Utc>, timeout: u8) -> bool {
+    Utc::now().signed_duration_since(last_updated).num_seconds() > timeout.into()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
