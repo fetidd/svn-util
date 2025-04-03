@@ -39,14 +39,14 @@ impl App {
 
     fn render_conflicts(&mut self, frame: &mut Frame, area: Rect) {
         let conflicts = self.file_list.conflicts();
-        let conflict_texts: Vec<Line> =
-            conflicts
-                .iter()
-                .map(transform_conflict)
-                .fold(vec![], |mut a, b| {
-                    a.extend(b);
-                    a
-                });
+        let max_width = area.width - 1 - 1 - 1; // 1 for state, 1 each side for block borders, 1 for scrollbar
+        let conflict_texts: Vec<Line> = conflicts
+            .iter()
+            .map(|c| transform_conflict(c, max_width))
+            .fold(vec![], |mut a, b| {
+                a.extend(b);
+                a
+            });
         self.conflicts_scrollbar_state = self
             .conflicts_scrollbar_state
             .content_length(conflict_texts.len());
@@ -62,7 +62,7 @@ impl App {
         frame.render_stateful_widget(
             scrollbar,
             area.inner(Margin {
-                horizontal: 1,
+                horizontal: 0,
                 vertical: 1,
             }),
             &mut self.conflicts_scrollbar_state,
@@ -81,7 +81,7 @@ impl App {
     }
 
     fn render_file_list(&mut self, frame: &mut Frame, area: Rect) {
-        let max_width = area.width - 5; // 1 for state, 2 for gap, 1 each side for block borders
+        let max_width = area.width - 3; // 1 each side for block borders, 1 for scrollbar
         let mut block = Block::bordered().title("Changes");
         if self.selected_section == Some(crate::app::AppSection::Changes) {
             block = block.style(Color::White);
@@ -94,22 +94,25 @@ impl App {
                     *state != State::Clean
                         && !svn::is_conflict_part(path.to_str().expect("bad path"))
                 }) // TODO if we ever care about the list showing status columns 2+, this filter may need rmeoving
-                .map(|psl| create_file_list_item(psl, max_width, &self.cwd)),
+                .map(|psl| create_file_list_item(psl, max_width)),
         )
-        .highlight_style(Style::new().italic())
+        .highlight_style(Style::new().bg(Color::DarkGray))
         .scroll_padding(1)
         .block(block);
         self.changes_scrollbar_state = self.changes_scrollbar_state.content_length(list.len());
+        let list_length = list.len() as u16;
         frame.render_stateful_widget(list, area, &mut self.list_state);
-        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight);
-        frame.render_stateful_widget(
-            scrollbar,
-            area.inner(Margin {
-                horizontal: 1,
-                vertical: 1,
-            }),
-            &mut self.changes_scrollbar_state,
-        );
+        if area.height - 2 < list_length as u16 {
+            let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight);
+            frame.render_stateful_widget(
+                scrollbar,
+                area.inner(Margin {
+                    horizontal: 0,
+                    vertical: 1,
+                }),
+                &mut self.changes_scrollbar_state,
+            );
+        }
         self.changes_area = Some(area);
     }
 
@@ -124,9 +127,15 @@ impl App {
     }
 }
 
-fn transform_conflict<'a>(conflict: &'a svn::Conflict) -> Vec<Line<'a>> {
-    let make_line =
-        |p: &'a PathBuf| Line::raw(p.to_str().expect("bad path")).style(Color::DarkGray);
+fn transform_conflict<'a>(conflict: &'a svn::Conflict, max_width: u16) -> Vec<Line<'a>> {
+    let make_line = |p: &'a PathBuf, color: Color| {
+        let mut text = p.to_str().expect("bad path").to_string();
+        if text.len() as u16 > max_width {
+            text = text.split_at(max_width as usize - 3).0.to_string();
+            text.push_str("...");
+        }
+        Line::raw(text).style(color)
+    };
     match conflict {
         Conflict::Text {
             file,
@@ -135,10 +144,10 @@ fn transform_conflict<'a>(conflict: &'a svn::Conflict) -> Vec<Line<'a>> {
             working,
         } => match (left, right, working) {
             (Some(l), Some(r), Some(w)) => vec![
-                Line::raw(file.to_str().unwrap()).style(Color::Magenta),
-                make_line(l),
-                make_line(w),
-                make_line(r),
+                make_line(file, Color::Magenta),
+                make_line(l, Color::DarkGray),
+                make_line(w, Color::DarkGray),
+                make_line(r, Color::DarkGray),
                 Line::raw(""),
             ],
             _ => panic!("can there even be a conflict without all 3 parts?"),
@@ -147,11 +156,7 @@ fn transform_conflict<'a>(conflict: &'a svn::Conflict) -> Vec<Line<'a>> {
 }
 
 /// Errors from PathBuf transformations are shown inline in the list view
-fn create_file_list_item<'a>(
-    (state, path): &'a ParsedStatusLine,
-    max_width: u16,
-    cwd: &PathBuf,
-) -> Line<'a> {
+fn create_file_list_item<'a>((state, path): &'a ParsedStatusLine, max_width: u16) -> Line<'a> {
     let state_span = match state {
         State::Modified => Span::from(state.to_string()).style(Color::Yellow),
         State::Added => Span::from(state.to_string()).style(Color::Green),
@@ -170,6 +175,7 @@ fn create_file_list_item<'a>(
         .to_str()
         .unwrap_or(&format!("ui.create_list_item issue: {path:?}"))
         .to_string();
+    let spacer = "   ";
     if max_width < 100 {
         // with a really wide terminal space we can just show the whole paths!
         filename = path
@@ -178,20 +184,7 @@ fn create_file_list_item<'a>(
             .to_str()
             .unwrap_or(&format!("ui.create_list_item issue: {path:?}"))
             .to_string();
-        if let Some(parent) = path.parent() {
-            if parent != cwd {
-                if let Some(parent) = parent.components().last() {
-                    filename = parent
-                        .as_os_str()
-                        .to_str()
-                        .unwrap_or(&format!("ui.create_list_item issue: {parent:?}"))
-                        .to_string()
-                        + "/"
-                        + &filename;
-                }
-            }
-        }
-        if (state_span.width() + 3 + filename.len()) as u16 > max_width {
+        if (state_span.width() + spacer.len() + filename.len()) as u16 >= max_width {
             filename = filename
                 .split_at_checked((max_width - 3) as usize)
                 .expect("we should always be able to split here")
@@ -202,7 +195,7 @@ fn create_file_list_item<'a>(
     }
     Line::from(vec![
         state_span,
-        Span::raw("   "),
+        Span::raw(spacer),
         Span::raw(filename).fg(Color::Reset),
     ])
 }

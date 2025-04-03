@@ -1,0 +1,6 @@
+... for long strings:
+	branch name
+	conflicts
+
+adjust ... for long strings to account for scrollbars
+status refresh timeout as arg/config

@@ -61,7 +61,7 @@ impl App {
                 .populate_from_svn_status(&status)
                 .expect("failed to populate from svn status");
         }
-        let list_state = ListState::default();
+        let list_state = ListState::default().with_selected(Some(0));
         let changes_scrollbar_state = ScrollbarState::default();
         let conflicts_scrollbar_state = ScrollbarState::default();
         Self {
@@ -126,7 +126,9 @@ impl App {
                 },
                 AppEvent::DeselectSection => self.selected_section = None,
                 AppEvent::Click { button, col, row } => self.handle_click(button, col, row),
-                AppEvent::Scroll { dir, col, row } => self.handle_mouse_scroll(dir, col, row),
+                AppEvent::MouseScroll { dir, col, row } => self.handle_mouse_scroll(dir, col, row),
+                AppEvent::NextChange => self.list_state.select_next(),
+                AppEvent::PrevChange => self.list_state.select_previous(),
             },
         }
         Ok(())
@@ -147,21 +149,17 @@ impl App {
                 Some(AppSection::Conflicts) => {
                     self.events.send(AppEvent::ConflictsScroll(Direction::Up))
                 }
-                Some(AppSection::Changes) => {
-                    self.events.send(AppEvent::ChangesScroll(Direction::Up))
-                }
+                Some(AppSection::Changes) => self.events.send(AppEvent::PrevChange),
                 None => {}
             },
             KeyCode::Down => match self.selected_section {
                 Some(AppSection::Conflicts) => {
                     self.events.send(AppEvent::ConflictsScroll(Direction::Down))
                 }
-                Some(AppSection::Changes) => {
-                    self.events.send(AppEvent::ChangesScroll(Direction::Down))
-                }
+                Some(AppSection::Changes) => self.events.send(AppEvent::NextChange),
                 None => {}
             },
-            KeyCode::Tab => self.events.send(AppEvent::ToggleSelectedSection),
+            KeyCode::Char('c') => self.events.send(AppEvent::ToggleSelectedSection),
             _ => {}
         }
         Ok(())
@@ -174,12 +172,12 @@ impl App {
                 col: mouse_event.column,
                 row: mouse_event.row,
             }),
-            MouseEventKind::ScrollDown => self.events.send(AppEvent::Scroll {
+            MouseEventKind::ScrollDown => self.events.send(AppEvent::MouseScroll {
                 dir: Direction::Down,
                 col: mouse_event.column,
                 row: mouse_event.row,
             }),
-            MouseEventKind::ScrollUp => self.events.send(AppEvent::Scroll {
+            MouseEventKind::ScrollUp => self.events.send(AppEvent::MouseScroll {
                 dir: Direction::Up,
                 col: mouse_event.column,
                 row: mouse_event.row,
@@ -227,11 +225,11 @@ impl App {
 
     fn handle_mouse_scroll(&mut self, dir: Direction, col: u16, row: u16) {
         match self.locate_mouse((row, col)) {
-            Some(AppSection::Changes) => handle_scroll(
-                &dir,
-                self.list_state.offset_mut(),
-                &mut self.changes_scrollbar_state,
-            ),
+            Some(AppSection::Changes) => {
+                if let Some(selected) = self.list_state.selected_mut() {
+                    handle_scroll(&dir, selected, &mut self.changes_scrollbar_state)
+                }
+            }
             Some(AppSection::Conflicts) => handle_scroll(
                 &dir,
                 &mut self.conflicts_scroll_offset,

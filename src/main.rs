@@ -6,6 +6,7 @@ use crossterm::{
 use crate::app::App;
 
 pub mod app;
+pub mod config;
 pub mod error;
 pub mod event;
 pub mod svn;

@@ -45,11 +45,13 @@ pub enum AppEvent {
         col: u16,
         row: u16,
     },
-    Scroll {
+    MouseScroll {
         dir: Direction,
         col: u16,
         row: u16,
     },
+    NextChange,
+    PrevChange,
 }
 
 #[derive(Clone, Debug)]
