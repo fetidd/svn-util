@@ -67,7 +67,7 @@ impl App {
             }),
             &mut self.conflicts_scrollbar_state,
         );
-        self.conflicts_area = Some(area.clone());
+        self.conflicts_area = Some(area);
     }
 
     fn render_branch_box(&self, frame: &mut Frame, area: Rect) {
@@ -110,7 +110,7 @@ impl App {
             }),
             &mut self.changes_scrollbar_state,
         );
-        self.changes_area = Some(area.clone());
+        self.changes_area = Some(area);
     }
 
     fn render_help(&self, frame: &mut Frame, area: Rect) {

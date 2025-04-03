@@ -28,32 +28,30 @@ impl FileList {
             let path_str = &path.to_str().expect("bad path");
             if *state == State::Conflicting && !conflict_map.contains_key(path_str) {
                 conflict_map.insert(*path_str, create_empty_text_conflict(path));
-            } else if *state == State::Unversioned {
-                if is_conflict_part(path_str) {
-                    let path_key = trim_conflict_suffix(path_str);
-                    conflict_map
-                        .entry(path_key)
-                        .and_modify(|conflict| match conflict {
-                            Conflict::Text {
-                                left,
-                                right,
-                                working,
-                                ..
-                            } => {
-                                if let Some(part) = parse_conflict_part(path_str) {
-                                    let prop = match part {
-                                        ConflictPart::Left => left,
-                                        ConflictPart::Right => right,
-                                        ConflictPart::Working => working,
-                                    };
-                                    *prop = Some(path.clone());
-                                } else {
-                                    panic!("do this instead of is_cnflictpart?>");
-                                }
+            } else if *state == State::Unversioned && is_conflict_part(path_str) {
+                let path_key = trim_conflict_suffix(path_str);
+                conflict_map
+                    .entry(path_key)
+                    .and_modify(|conflict| match conflict {
+                        Conflict::Text {
+                            left,
+                            right,
+                            working,
+                            ..
+                        } => {
+                            if let Some(part) = parse_conflict_part(path_str) {
+                                let prop = match part {
+                                    ConflictPart::Left => left,
+                                    ConflictPart::Right => right,
+                                    ConflictPart::Working => working,
+                                };
+                                *prop = Some(path.clone());
+                            } else {
+                                panic!("do this instead of is_cnflictpart?>");
                             }
-                        })
-                        .or_insert(create_empty_text_conflict(path));
-                }
+                        }
+                    })
+                    .or_insert(create_empty_text_conflict(path));
             }
         }
         conflict_map.into_values().collect()

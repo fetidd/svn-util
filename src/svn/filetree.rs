@@ -18,7 +18,7 @@ pub struct Tree {
 impl Tree {
     pub fn build_from_svn_status(svn_status: &str) -> Result<Self, ()> {
         let mut parsed = super::parse_svn_status(svn_status)?;
-        let mut t = Self::default();
+        let t = Self::default();
         for (i, (_, path)) in parsed.iter_mut().enumerate() {
             let components = path.components().collect::<Vec<_>>();
         }

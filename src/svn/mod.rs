@@ -13,7 +13,7 @@ use crate::error::{Error, ErrorKind};
 pub fn get_svn_status(path: &PathBuf) -> Result<String, Error> {
     let mut status_cmd = std::process::Command::new("svn");
     match status_cmd
-        .args(["status", &path.to_str().expect("bad path")])
+        .args(["status", path.to_str().expect("bad path")])
         .output()
     {
         Ok(output) => Ok(String::from_utf8(output.stdout).expect("svn gave bad status output")),
@@ -24,7 +24,7 @@ pub fn get_svn_status(path: &PathBuf) -> Result<String, Error> {
 pub fn get_branch_name(path: &PathBuf) -> Result<String, Error> {
     let mut cmd = Command::new("svn");
     let output = cmd
-        .args(["info", &path.to_str().expect("bad path")])
+        .args(["info", path.to_str().expect("bad path")])
         .output()
         .map_err(|e| Error {
             kind: ErrorKind::SvnError,
@@ -97,7 +97,7 @@ fn create_empty_text_conflict(file: &PathBuf) -> Conflict {
     }
 }
 
-fn trim_conflict_suffix<'a>(path_str: &'a str) -> &'a str {
+fn trim_conflict_suffix(path_str: &str) -> &str {
     let i_merge = path_str.find(".merge-");
     let i_working = path_str.find(".working");
     match (i_merge, i_working) {

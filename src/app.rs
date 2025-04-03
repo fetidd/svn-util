@@ -40,6 +40,12 @@ pub struct App {
     pub conflicts_area: Option<Rect>,
 }
 
+impl Default for App {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl App {
     /// Constructs a new instance of [`App`].
     pub fn new() -> Self {
@@ -214,11 +220,8 @@ impl App {
     }
 
     fn handle_click(&mut self, button: MouseButton, col: u16, row: u16) {
-        match button {
-            MouseButton::Left => {
-                self.selected_section = self.locate_mouse((row, col));
-            }
-            _ => {}
+        if button == MouseButton::Left {
+            self.selected_section = self.locate_mouse((row, col));
         }
     }
 
