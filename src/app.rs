@@ -5,9 +5,11 @@ use crate::{
     svn,
 };
 use chrono::{DateTime, Utc};
+use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{
     DefaultTerminal,
     crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
+    layout::Rect,
     widgets::{ListState, ScrollbarState},
 };
 
@@ -33,6 +35,9 @@ pub struct App {
     pub conflicts_scrollbar_state: ScrollbarState,
     pub conflicts_scroll_offset: usize,
     pub selected_section: Option<AppSection>,
+    // UI areas mainly used for mouse clicks etc.
+    pub changes_area: Option<Rect>,
+    pub conflicts_area: Option<Rect>,
 }
 
 impl App {
@@ -65,6 +70,8 @@ impl App {
             conflicts_scrollbar_state,
             conflicts_scroll_offset: 0,
             selected_section: None,
+            changes_area: None,
+            conflicts_area: None,
         }
     }
 
@@ -77,26 +84,14 @@ impl App {
         Ok(())
     }
 
-    fn update_svn_status(&mut self) {
-        // TODO error popup here?
-        if let Ok(status) = svn::get_svn_status(&self.cwd) {
-            let _ = self.file_list.populate_from_svn_status(&status);
-        }
-        self.last_updated = Utc::now();
-    }
-
-    fn update_branch_name(&mut self) {
-        self.current_branch = match svn::get_branch_name(&self.cwd) {
-            Ok(branch) => branch,
-            Err(e) => e.message,
-        };
-    }
-
     fn handle_events(&mut self) -> color_eyre::Result<()> {
         match self.events.next()? {
             Event::Tick => self.tick(),
             Event::Crossterm(event) => match event {
                 crossterm::event::Event::Key(key_event) => self.handle_key_event(key_event)?,
+                crossterm::event::Event::Mouse(mouse_event) => {
+                    self.handle_mouse_event(mouse_event)?
+                }
                 _ => {}
             },
             Event::App(app_event) => match app_event {
@@ -105,23 +100,27 @@ impl App {
                     self.update_branch_name();
                     self.update_svn_status();
                 }
-                AppEvent::ConflictsScroll(dir) => match dir {
-                    Direction::Up => {
-                        self.conflicts_scroll_offset =
-                            self.conflicts_scroll_offset.saturating_sub(1);
-                        self.conflicts_scrollbar_state = self
-                            .conflicts_scrollbar_state
-                            .position(self.conflicts_scroll_offset);
+                AppEvent::ConflictsScroll(dir) => handle_scroll(
+                    &dir,
+                    &mut self.conflicts_scroll_offset,
+                    &mut self.conflicts_scrollbar_state,
+                ),
+                AppEvent::ChangesScroll(dir) => handle_scroll(
+                    &dir,
+                    self.list_state.offset_mut(),
+                    &mut self.changes_scrollbar_state,
+                ),
+                AppEvent::ToggleSelectedSection => match self.selected_section {
+                    Some(AppSection::Changes) => {
+                        self.selected_section = Some(AppSection::Conflicts)
                     }
-                    Direction::Down => {
-                        self.conflicts_scroll_offset =
-                            self.conflicts_scroll_offset.saturating_add(1);
-                        self.conflicts_scrollbar_state = self
-                            .conflicts_scrollbar_state
-                            .position(self.conflicts_scroll_offset);
+                    Some(AppSection::Conflicts) | None => {
+                        self.selected_section = Some(AppSection::Changes)
                     }
                 },
-                AppEvent::ChangesScroll(dir) => todo!(),
+                AppEvent::DeselectSection => self.selected_section = None,
+                AppEvent::Click { button, col, row } => self.handle_click(button, col, row),
+                AppEvent::Scroll { dir, col, row } => self.handle_mouse_scroll(dir, col, row),
             },
         }
         Ok(())
@@ -130,11 +129,13 @@ impl App {
     /// Handles the key events and updates the state of [`App`].
     fn handle_key_event(&mut self, key_event: KeyEvent) -> color_eyre::Result<()> {
         match key_event.code {
+            KeyCode::Esc if self.selected_section.is_some() => {
+                self.events.send(AppEvent::DeselectSection)
+            }
             KeyCode::Esc | KeyCode::Char('q') => self.events.send(AppEvent::Quit),
             KeyCode::Char('c' | 'C') if key_event.modifiers == KeyModifiers::CONTROL => {
                 self.events.send(AppEvent::Quit)
             }
-            // Other handlers you could add here.
             KeyCode::Char('r' | 'R') => self.events.send(AppEvent::UpdateRequest),
             KeyCode::Up => match self.selected_section {
                 Some(AppSection::Conflicts) => {
@@ -154,6 +155,29 @@ impl App {
                 }
                 None => {}
             },
+            KeyCode::Tab => self.events.send(AppEvent::ToggleSelectedSection),
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_mouse_event(&mut self, mouse_event: MouseEvent) -> color_eyre::Result<()> {
+        match mouse_event.kind {
+            MouseEventKind::Down(btn) => self.events.send(AppEvent::Click {
+                button: btn,
+                col: mouse_event.column,
+                row: mouse_event.row,
+            }),
+            MouseEventKind::ScrollDown => self.events.send(AppEvent::Scroll {
+                dir: Direction::Down,
+                col: mouse_event.column,
+                row: mouse_event.row,
+            }),
+            MouseEventKind::ScrollUp => self.events.send(AppEvent::Scroll {
+                dir: Direction::Up,
+                col: mouse_event.column,
+                row: mouse_event.row,
+            }),
             _ => {}
         }
         Ok(())
@@ -164,22 +188,82 @@ impl App {
     /// The tick event is where you can update the state of your application with any logic that
     /// needs to be updated at a fixed frame rate. E.g. polling a server, updating an animation.
     fn tick(&mut self) {
-        if self.is_time_for_update() {
+        if is_time_for_update(self.last_updated) {
             self.events.send(AppEvent::UpdateRequest);
         }
-    }
-
-    fn is_time_for_update(&self) -> bool {
-        Utc::now()
-            .signed_duration_since(self.last_updated)
-            .num_seconds()
-            > SVN_STATUS_TIMEOUT
     }
 
     /// Set running to false to quit the application.
     fn quit(&mut self) {
         self.running = false;
     }
+
+    fn update_svn_status(&mut self) {
+        // TODO error popup here?
+        if let Ok(status) = svn::get_svn_status(&self.cwd) {
+            let _ = self.file_list.populate_from_svn_status(&status);
+        }
+        self.last_updated = Utc::now();
+    }
+
+    fn update_branch_name(&mut self) {
+        self.current_branch = match svn::get_branch_name(&self.cwd) {
+            Ok(branch) => branch,
+            Err(e) => e.message,
+        };
+    }
+
+    fn handle_click(&mut self, button: MouseButton, col: u16, row: u16) {
+        match button {
+            MouseButton::Left => {
+                self.selected_section = self.locate_mouse((row, col));
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_mouse_scroll(&mut self, dir: Direction, col: u16, row: u16) {
+        match self.locate_mouse((row, col)) {
+            Some(AppSection::Changes) => handle_scroll(
+                &dir,
+                self.list_state.offset_mut(),
+                &mut self.changes_scrollbar_state,
+            ),
+            Some(AppSection::Conflicts) => handle_scroll(
+                &dir,
+                &mut self.conflicts_scroll_offset,
+                &mut self.conflicts_scrollbar_state,
+            ),
+            None => {}
+        }
+    }
+
+    fn locate_mouse(&self, (row, col): (u16, u16)) -> Option<AppSection> {
+        for (area, app_section) in [
+            (self.changes_area, AppSection::Changes),
+            (self.conflicts_area, AppSection::Conflicts),
+        ] {
+            if let Some(area) = area {
+                if area.contains((col, row).into()) {
+                    return Some(app_section);
+                }
+            }
+        }
+        None
+    }
+}
+
+fn handle_scroll(dir: &Direction, offset: &mut usize, bar_state: &mut ScrollbarState) {
+    let operation = match dir {
+        Direction::Up => usize::saturating_sub,
+        Direction::Down => usize::saturating_add,
+    };
+    *offset = operation(*offset, 1);
+    *bar_state = bar_state.position(*offset);
+}
+
+fn is_time_for_update(last_updated: DateTime<Utc>) -> bool {
+    Utc::now().signed_duration_since(last_updated).num_seconds() > SVN_STATUS_TIMEOUT
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

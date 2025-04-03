@@ -1,8 +1,5 @@
 use color_eyre::eyre::WrapErr;
-use ratatui::{
-    crossterm::event::{self, Event as CrosstermEvent},
-    widgets::ScrollDirection,
-};
+use ratatui::crossterm::event::{self, Event as CrosstermEvent};
 use std::{
     sync::mpsc,
     thread,
@@ -41,6 +38,18 @@ pub enum AppEvent {
     UpdateRequest,
     ConflictsScroll(Direction),
     ChangesScroll(Direction),
+    ToggleSelectedSection,
+    DeselectSection,
+    Click {
+        button: crossterm::event::MouseButton,
+        col: u16,
+        row: u16,
+    },
+    Scroll {
+        dir: Direction,
+        col: u16,
+        row: u16,
+    },
 }
 
 #[derive(Clone, Debug)]

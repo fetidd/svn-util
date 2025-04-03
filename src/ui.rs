@@ -2,8 +2,8 @@ use std::{ffi::OsStr, path::PathBuf};
 
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout, Rect},
-    style::{Color, Style, Stylize},
+    layout::{Constraint, Layout, Margin, Rect},
+    style::{Color, Modifier, Style, Stylize},
     text::{Line, Span, Text},
     widgets::{Block, List, Paragraph, Scrollbar, ScrollbarOrientation},
 };
@@ -50,13 +50,24 @@ impl App {
         self.conflicts_scrollbar_state = self
             .conflicts_scrollbar_state
             .content_length(conflict_texts.len());
-        let block = Block::bordered().title("Conflicts");
+        let mut block = Block::bordered().title("Conflicts");
+        if self.selected_section == Some(crate::app::AppSection::Conflicts) {
+            block = block.style(Color::Cyan);
+        }
         let paragraph = Paragraph::new(conflict_texts)
             .block(block)
             .scroll((self.conflicts_scroll_offset as u16, 0));
-        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight);
         frame.render_widget(paragraph, area);
-        frame.render_stateful_widget(scrollbar, area, &mut self.conflicts_scrollbar_state);
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight);
+        frame.render_stateful_widget(
+            scrollbar,
+            area.inner(Margin {
+                horizontal: 1,
+                vertical: 1,
+            }),
+            &mut self.conflicts_scrollbar_state,
+        );
+        self.conflicts_area = Some(area.clone());
     }
 
     fn render_branch_box(&self, frame: &mut Frame, area: Rect) {
@@ -71,7 +82,10 @@ impl App {
 
     fn render_file_list(&mut self, frame: &mut Frame, area: Rect) {
         let max_width = area.width - 5; // 1 for state, 2 for gap, 1 each side for block borders
-        let block = Block::bordered().title("Changes");
+        let mut block = Block::bordered().title("Changes");
+        if self.selected_section == Some(crate::app::AppSection::Changes) {
+            block = block.style(Color::Cyan);
+        }
         let list = List::new(
             self.file_list
                 .list()
@@ -80,20 +94,39 @@ impl App {
                     *state != State::Clean
                         && !svn::is_conflict_part(path.to_str().expect("bad path"))
                 }) // TODO if we ever care about the list showing status columns 2+, this filter may need rmeoving
-                .map(|psl| create_list_item(psl, max_width, &self.cwd)),
+                .map(|psl| create_file_list_item(psl, max_width, &self.cwd)),
         )
         .highlight_style(Style::new().italic())
+        .scroll_padding(1)
         .block(block);
+        self.changes_scrollbar_state = self.changes_scrollbar_state.content_length(list.len());
         frame.render_stateful_widget(list, area, &mut self.list_state);
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight);
+        frame.render_stateful_widget(
+            scrollbar,
+            area.inner(Margin {
+                horizontal: 1,
+                vertical: 1,
+            }),
+            &mut self.changes_scrollbar_state,
+        );
+        self.changes_area = Some(area.clone());
     }
 
     fn render_help(&self, frame: &mut Frame, area: Rect) {
-        let help = Line::from(vec![Span::raw("Refresh <r|R> "), Span::raw("Quit <q|Q>")]);
+        let help = Line::from(vec![
+            Span::raw("Refresh <r|R> "),
+            Span::raw("Quit <q|Q> "),
+            Span::raw("Toggle section <Tab> "),
+        ])
+        .style(Color::Gray);
         frame.render_widget(help, area);
     }
 }
 
-fn transform_conflict(conflict: &svn::Conflict) -> Vec<Line> {
+fn transform_conflict<'a>(conflict: &'a svn::Conflict) -> Vec<Line<'a>> {
+    let make_line =
+        |p: &'a PathBuf| Line::raw(p.to_str().expect("bad path")).style(Color::DarkGray);
     match conflict {
         Conflict::Text {
             file,
@@ -102,10 +135,10 @@ fn transform_conflict(conflict: &svn::Conflict) -> Vec<Line> {
             working,
         } => match (left, right, working) {
             (Some(l), Some(r), Some(w)) => vec![
-                Line::raw(file.to_str().unwrap()),
-                Line::raw(l.to_str().expect("bad path")).style(Color::DarkGray),
-                Line::raw(w.to_str().expect("bad path")).style(Color::DarkGray),
-                Line::raw(r.to_str().expect("bad path")).style(Color::DarkGray),
+                Line::raw(file.to_str().unwrap()).style(Color::Magenta),
+                make_line(l),
+                make_line(w),
+                make_line(r),
                 Line::raw(""),
             ],
             _ => panic!("can there even be a conflict without all 3 parts?"),
@@ -114,22 +147,25 @@ fn transform_conflict(conflict: &svn::Conflict) -> Vec<Line> {
 }
 
 /// Errors from PathBuf transformations are shown inline in the list view
-fn create_list_item<'a>(
+fn create_file_list_item<'a>(
     (state, path): &'a ParsedStatusLine,
     max_width: u16,
     cwd: &PathBuf,
-) -> Text<'a> {
-    let mut item = match state {
-        State::Modified => Text::from(state.to_string()).style(Color::Yellow),
-        State::Added => Text::from(state.to_string()).style(Color::Green),
-        State::Deleted => Text::from(state.to_string()).style(Color::Red),
-        State::Missing => Text::from(state.to_string()).style(Color::LightRed),
-        State::Replaced => Text::from(state.to_string()).style(Color::Cyan),
-        State::Unversioned => Text::from(state.to_string()).style(Color::White),
-        State::Conflicting => Text::from(state.to_string()).style(Color::LightMagenta),
-        State::Clean => Text::from(state.to_string()).style(Color::DarkGray),
+) -> Line<'a> {
+    let state_span = match state {
+        State::Modified => Span::from(state.to_string()).style(Color::Yellow),
+        State::Added => Span::from(state.to_string()).style(Color::Green),
+        State::Deleted => Span::from(state.to_string()).style(Color::Red),
+        State::Missing => Span::from(state.to_string()).style(
+            Style::new()
+                .fg(Color::Red)
+                .add_modifier(Modifier::RAPID_BLINK),
+        ),
+        State::Replaced => Span::from(state.to_string()).style(Color::Cyan),
+        State::Unversioned => Span::from(state.to_string()).style(Color::White),
+        State::Conflicting => Span::from(state.to_string()).style(Color::LightMagenta),
+        State::Clean => Span::from(state.to_string()).style(Color::DarkGray),
     };
-    item.push_span("  ");
     let mut filename = path
         .to_str()
         .unwrap_or(&format!("ui.create_list_item issue: {path:?}"))
@@ -155,7 +191,7 @@ fn create_list_item<'a>(
                 }
             }
         }
-        if (item.width() + filename.len()) as u16 > max_width {
+        if (state_span.width() + 3 + filename.len()) as u16 > max_width {
             filename = filename
                 .split_at_checked((max_width - 3) as usize)
                 .expect("we should always be able to split here")
@@ -164,6 +200,9 @@ fn create_list_item<'a>(
             filename.push_str("...");
         }
     }
-    item.push_span(filename);
-    item
+    Line::from(vec![
+        state_span,
+        Span::raw("   "),
+        Span::raw(filename).fg(Color::White),
+    ])
 }

@@ -1,15 +1,15 @@
 use std::collections::HashMap;
 
 use super::{
-    Conflict, ConflictPart, create_empty_text_conflict, parse_conflict_part, state::State,
-    trim_conflict_suffix,
+    Conflict, ConflictPart, ParsedStatusLine, create_empty_text_conflict, is_conflict_part,
+    parse_conflict_part, parse_svn_status, state::State, trim_conflict_suffix,
 };
 
 #[derive(Debug, Clone)]
-pub struct FileList(Vec<super::ParsedStatusLine>);
+pub struct FileList(Vec<ParsedStatusLine>);
 
 impl FileList {
-    pub fn list(&self) -> &[super::ParsedStatusLine] {
+    pub fn list(&self) -> &[ParsedStatusLine] {
         &self.0
     }
 
@@ -18,7 +18,7 @@ impl FileList {
     }
 
     pub fn populate_from_svn_status(&mut self, svn_status: &str) -> Result<(), ()> {
-        self.0 = super::parse_svn_status(svn_status)?;
+        self.0 = parse_svn_status(svn_status)?;
         Ok(())
     }
 
@@ -29,7 +29,7 @@ impl FileList {
             if *state == State::Conflicting && !conflict_map.contains_key(path_str) {
                 conflict_map.insert(*path_str, create_empty_text_conflict(path));
             } else if *state == State::Unversioned {
-                if super::is_conflict_part(path_str) {
+                if is_conflict_part(path_str) {
                     let path_key = trim_conflict_suffix(path_str);
                     conflict_map
                         .entry(path_key)
