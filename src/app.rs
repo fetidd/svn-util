@@ -224,12 +224,20 @@ impl App {
 
     fn handle_click(&mut self, button: MouseButton, col: u16, row: u16) {
         if button == MouseButton::Left {
-            self.selected_section = self.locate_mouse((row, col));
+            let section = self.current_mouse_section((row, col));
+            if let Some(AppSection::Changes) = section {
+                if let Some(rect) = self.changes_area {
+                    let offset = row - rect.y;
+                    let index = (offset as usize + self.list_state.offset()).saturating_sub(1);
+                    *self.list_state.selected_mut() = Some(index);
+                }
+            }
+            self.selected_section = section;
         }
     }
 
     fn handle_mouse_scroll(&mut self, dir: Direction, col: u16, row: u16) {
-        match self.locate_mouse((row, col)) {
+        match self.current_mouse_section((row, col)) {
             Some(AppSection::Changes) => {
                 if let Some(selected) = self.list_state.selected_mut() {
                     handle_scroll(&dir, selected, &mut self.changes_scrollbar_state)
@@ -244,7 +252,7 @@ impl App {
         }
     }
 
-    fn locate_mouse(&self, (row, col): (u16, u16)) -> Option<AppSection> {
+    fn current_mouse_section(&self, (row, col): (u16, u16)) -> Option<AppSection> {
         for (area, app_section) in [
             (self.changes_area, AppSection::Changes),
             (self.conflicts_area, AppSection::Conflicts),
