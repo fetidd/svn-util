@@ -52,7 +52,7 @@ impl App {
             .content_length(conflict_texts.len());
         let mut block = Block::bordered().title("Conflicts");
         if self.selected_section == Some(crate::app::AppSection::Conflicts) {
-            block = block.style(Color::Cyan);
+            block = block.style(Color::White);
         }
         let paragraph = Paragraph::new(conflict_texts)
             .block(block)
@@ -84,7 +84,7 @@ impl App {
         let max_width = area.width - 5; // 1 for state, 2 for gap, 1 each side for block borders
         let mut block = Block::bordered().title("Changes");
         if self.selected_section == Some(crate::app::AppSection::Changes) {
-            block = block.style(Color::Cyan);
+            block = block.style(Color::White);
         }
         let list = List::new(
             self.file_list
@@ -203,6 +203,6 @@ fn create_file_list_item<'a>(
     Line::from(vec![
         state_span,
         Span::raw("   "),
-        Span::raw(filename).fg(Color::White),
+        Span::raw(filename).fg(Color::Reset),
     ])
 }
