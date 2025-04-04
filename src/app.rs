@@ -42,6 +42,8 @@ pub struct App {
     pub config: Config,
     pub mouse_loc: (u16, u16), // row, col
     pub state: AppState,
+
+    pub last_message: String,
 }
 
 #[derive(Debug, PartialEq)]
@@ -93,6 +95,7 @@ impl App {
             selected_change_index: None,
             state: AppState::Main,
             change_popup_area: None,
+            last_message: String::new(),
         }
     }
 
@@ -146,6 +149,7 @@ impl App {
                 AppEvent::NextChange => self.list_state.select_next(),
                 AppEvent::PrevChange => self.list_state.select_previous(),
                 AppEvent::SelectChange => self.state = AppState::ChangePopup,
+                AppEvent::Message(msg) => self.last_message = msg,
             },
         }
         Ok(())
@@ -223,6 +227,10 @@ impl App {
 
     /// Handles any mouse clicks within the UI.
     fn handle_click(&mut self, button: MouseButton) {
+        self.events.send(AppEvent::Message(format!(
+            "{:?} {:?} {:?}",
+            self.state, self.selected_section, self.mouse_loc
+        )));
         let section = self.current_mouse_section();
         match section {
             Some(AppSection::Changes) => {
@@ -236,6 +244,7 @@ impl App {
                         }
                     } else {
                         self.state = AppState::Main;
+                        self.change_popup_area = None;
                     }
                     if button == MouseButton::Left {
                         if index <= self.file_list.renderable().len() {
@@ -250,6 +259,7 @@ impl App {
             _ => {
                 *self.list_state.selected_mut() = None;
                 self.state = AppState::Main;
+                self.change_popup_area = None;
             }
         }
         self.selected_section = section;

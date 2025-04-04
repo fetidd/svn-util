@@ -25,7 +25,7 @@ impl App {
         let mut constraints = vec![
             Constraint::Length(4),
             Constraint::Fill(1),
-            // Constraint::Length(1),
+            Constraint::Length(1),
         ];
         if should_render_conflicts {
             constraints.insert(2, Constraint::Percentage(20));
@@ -38,12 +38,12 @@ impl App {
         i += 1;
         if should_render_conflicts {
             self.render_conflicts(frame, layout[i]);
-            // i += 1;
+            i += 1;
         }
         if should_render_change_popup {
             self.render_change_popup(frame);
         }
-        // self.render_help(frame, layout[i]);
+        self.render_message_box(frame, layout[i]);
     }
 
     fn render_change_popup<'a>(&'a mut self, frame: &mut Frame) {
@@ -59,7 +59,7 @@ impl App {
                 .block(Block::bordered())
                 .fg(color)
         };
-        let mut buttons = vec![Paragraph::new("Open").centered().block(Block::bordered())];
+        let mut buttons = vec![button("Open", Color::Reset)];
         if state.is_deletable() {
             buttons.push(button("Delete", Color::Red));
         }
@@ -70,12 +70,17 @@ impl App {
             buttons.push(button("Commit", Color::Green));
         }
         let constraints = vec![Constraint::Length(3); buttons.len()];
-        let area = popup_area(
-            frame.area(),
-            60,
-            buttons.len() as u16 * 3 + 2,
-            self.mouse_loc,
-        );
+        let area = self.change_popup_area.unwrap_or({
+            let (row, col) = self.mouse_loc;
+            let width = std::cmp::min(40, frame.area().width - col - 2);
+            let height = std::cmp::min(buttons.len() as u16 * 3 + 2, frame.area().height - row - 2);
+            Rect {
+                x: col,
+                y: row,
+                width,
+                height,
+            }
+        });
         frame.render_widget(Clear, area); // clear the popup area
         let layout = Layout::vertical(constraints).split(area.inner(Margin {
             horizontal: 1,
@@ -171,15 +176,10 @@ impl App {
         self.changes_area = Some(area);
     }
 
-    // fn render_help(&self, frame: &mut Frame, area: Rect) {
-    //     let help = Line::from(vec![
-    //         Span::raw("Refresh <r|R> "),
-    //         Span::raw("Quit <q|Q> "),
-    //         Span::raw("Toggle section <Tab> "),
-    //     ])
-    //     .style(Color::Gray);
-    //     frame.render_widget(help, area);
-    // }
+    fn render_message_box(&self, frame: &mut Frame, area: Rect) {
+        let help = Line::from(vec![Span::raw(&self.last_message)]).style(Color::Gray);
+        frame.render_widget(help, area);
+    }
 }
 
 fn transform_conflict<'a>(conflict: &'a Conflict, max_width: u16) -> Vec<Line<'a>> {
@@ -260,10 +260,10 @@ fn create_file_list_item<'a>((state, path): &'a ParsedStatusLine, max_width: u16
 }
 
 /// helper function to create a centered rect using up certain percentage of the available rect `r`
-fn popup_area(area: Rect, width: u16, height: u16, (row, col): (u16, u16)) -> Rect {
-    let vertical = Layout::vertical([Constraint::Length(height)]).flex(Flex::Center);
-    let horizontal = Layout::horizontal([Constraint::Length(width)]).flex(Flex::Center);
+fn popup_area(area: Rect, width: u16, height: u16) -> Rect {
+    let vertical = Layout::vertical([Constraint::Length(height)]);
+    let horizontal = Layout::horizontal([Constraint::Length(width)]);
     let [area] = vertical.areas(area);
-    let [mut area] = horizontal.areas(area);
+    let [area] = horizontal.areas(area);
     area
 }

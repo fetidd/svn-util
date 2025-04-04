@@ -43,6 +43,7 @@ pub enum AppEvent {
     NextChange,
     PrevChange,
     SelectChange,
+    Message(String),
 }
 
 #[derive(Clone, Debug)]
