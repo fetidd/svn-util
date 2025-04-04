@@ -1,5 +1,6 @@
 use std::{ffi::OsStr, path::PathBuf};
 
+use color_eyre::owo_colors::OwoColorize;
 use ratatui::{
     Frame,
     layout::{Constraint, Flex, Layout, Margin, Rect},
@@ -45,13 +46,48 @@ impl App {
         // self.render_help(frame, layout[i]);
     }
 
-    fn render_change_popup(&mut self, frame: &mut Frame) {
-        let block = Block::bordered();
-        let mut constraints = vec![Constraint::Fill(1)];
-        let area = popup_area(frame.area(), 80, 20);
-        let popup_layout = Layout::vertical(constraints).split(area);
-        frame.render_widget(Clear, popup_layout[0]);
-        frame.render_widget(block, popup_layout[0]);
+    fn render_change_popup<'a>(&'a mut self, frame: &mut Frame) {
+        self.selected_section = Some(AppSection::ChangePopup);
+        let (state, path_buf) = self
+            .get_selected_change()
+            .expect("Somehow opened a changed popup without a selected change?!");
+        let path = path_buf.file_name().unwrap().to_str().unwrap();
+        let popup = Block::bordered().title(path);
+        let button = |title: &'a str, color: Color| {
+            Paragraph::new(title)
+                .centered()
+                .block(Block::bordered())
+                .fg(color)
+        };
+        let mut buttons = vec![Paragraph::new("Open").centered().block(Block::bordered())];
+        if state.is_deletable() {
+            buttons.push(button("Delete", Color::Red));
+        }
+        if state.is_revertable() {
+            buttons.push(button("Revert", Color::Yellow));
+        }
+        if state.is_commitable() {
+            buttons.push(button("Commit", Color::Green));
+        }
+        let constraints = vec![Constraint::Length(3); buttons.len()];
+        let area = popup_area(
+            frame.area(),
+            60,
+            buttons.len() as u16 * 3 + 2,
+            self.mouse_loc,
+        );
+        frame.render_widget(Clear, area); // clear the popup area
+        let layout = Layout::vertical(constraints).split(area.inner(Margin {
+            horizontal: 1,
+            vertical: 1,
+        }));
+        for i in 0..buttons.len() {
+            frame.render_widget(
+                buttons.pop().expect("We somehow ran out of buttons?"),
+                layout[i],
+            );
+        }
+        frame.render_widget(popup, area);
         self.change_popup_area = Some(area);
     }
 
@@ -224,10 +260,10 @@ fn create_file_list_item<'a>((state, path): &'a ParsedStatusLine, max_width: u16
 }
 
 /// helper function to create a centered rect using up certain percentage of the available rect `r`
-fn popup_area(area: Rect, percent_x: u16, percent_y: u16) -> Rect {
-    let vertical = Layout::vertical([Constraint::Percentage(percent_y)]).flex(Flex::Center);
-    let horizontal = Layout::horizontal([Constraint::Percentage(percent_x)]).flex(Flex::Center);
+fn popup_area(area: Rect, width: u16, height: u16, (row, col): (u16, u16)) -> Rect {
+    let vertical = Layout::vertical([Constraint::Length(height)]).flex(Flex::Center);
+    let horizontal = Layout::horizontal([Constraint::Length(width)]).flex(Flex::Center);
     let [area] = vertical.areas(area);
-    let [area] = horizontal.areas(area);
+    let [mut area] = horizontal.areas(area);
     area
 }

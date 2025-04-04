@@ -12,6 +12,33 @@ pub enum State {
     Missing,     // !
 }
 
+impl State {
+    pub(crate) fn is_commitable(&self) -> bool {
+        match self {
+            State::Modified | State::Added | State::Deleted => true,
+            _ => false,
+        }
+    }
+
+    pub(crate) fn is_revertable(&self) -> bool {
+        match self {
+            State::Modified
+            | State::Added
+            | State::Deleted
+            | State::Conflicting
+            | State::Missing => true,
+            _ => false,
+        }
+    }
+
+    pub(crate) fn is_deletable(&self) -> bool {
+        match self {
+            State::Modified | State::Missing | State::Conflicting => true,
+            _ => false,
+        }
+    }
+}
+
 impl FromStr for State {
     type Err = ();
 

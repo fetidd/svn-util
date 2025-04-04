@@ -222,22 +222,27 @@ impl App {
     }
 
     /// Handles any mouse clicks within the UI.
-    fn handle_click(&mut self, _button: MouseButton) {
+    fn handle_click(&mut self, button: MouseButton) {
         let section = self.current_mouse_section();
         match section {
             Some(AppSection::Changes) => {
                 if let Some(rect) = self.changes_area {
                     let offset = self.mouse_loc.0 - rect.y;
                     let index = (offset as usize + self.list_state.offset()).saturating_sub(1);
-                    if self.list_state.selected() == Some(index) {
-                        self.state = AppState::ChangePopup;
+                    if button == MouseButton::Right {
+                        if index <= self.file_list.renderable().len() {
+                            *self.list_state.selected_mut() = Some(index);
+                            self.state = AppState::ChangePopup;
+                        }
                     } else {
                         self.state = AppState::Main;
                     }
-                    if index <= self.file_list.renderable().len() {
-                        *self.list_state.selected_mut() = Some(index);
-                    } else {
-                        *self.list_state.selected_mut() = None;
+                    if button == MouseButton::Left {
+                        if index <= self.file_list.renderable().len() {
+                            *self.list_state.selected_mut() = Some(index);
+                        } else {
+                            *self.list_state.selected_mut() = None;
+                        }
                     }
                 }
             }
