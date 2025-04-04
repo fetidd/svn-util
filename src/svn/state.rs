@@ -17,6 +17,7 @@ impl FromStr for State {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.chars().nth(0) {
+            // TODO maybe use bitflags instead of an enum if we want to cover the other possibilities??
             Some(ch) => match ch {
                 'M' => Ok(State::Modified),
                 'A' => Ok(State::Added),

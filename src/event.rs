@@ -40,18 +40,9 @@ pub enum AppEvent {
     ChangesScroll(Direction),
     ToggleSelectedSection,
     DeselectSection,
-    Click {
-        button: crossterm::event::MouseButton,
-        col: u16,
-        row: u16,
-    },
-    MouseScroll {
-        dir: Direction,
-        col: u16,
-        row: u16,
-    },
     NextChange,
     PrevChange,
+    SelectChange,
 }
 
 #[derive(Clone, Debug)]

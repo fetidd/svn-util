@@ -3,14 +3,14 @@ use std::path::PathBuf;
 use crate::{
     config::Config,
     event::{AppEvent, Direction, Event, EventHandler},
-    svn,
+    svn::{self, ParsedStatusLine},
 };
 use chrono::{DateTime, Utc};
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{
     DefaultTerminal,
-    crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
-    layout::Rect,
+    crossterm::event::{Event as CtEvent, KeyCode, KeyEvent, KeyModifiers},
+    layout::{Position, Rect},
     widgets::{ListState, ScrollbarState},
 };
 
@@ -26,6 +26,7 @@ pub struct App {
     pub file_list: svn::FileList,
     /// The state of the displayed changes list
     pub list_state: ListState,
+    pub selected_change_index: Option<usize>,
     /// The last time 'svn status' was run
     pub last_updated: DateTime<Utc>,
     /// The current working directory
@@ -37,7 +38,16 @@ pub struct App {
     // UI areas mainly used for mouse clicks etc.
     pub changes_area: Option<Rect>,
     pub conflicts_area: Option<Rect>,
+    pub change_popup_area: Option<Rect>,
     pub config: Config,
+    pub mouse_loc: (u16, u16), // row, col
+    pub state: AppState,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum AppState {
+    Main,        // The main screen
+    ChangePopup, // A popup caused by a change is shown over the main screen
 }
 
 impl Default for App {
@@ -79,6 +89,10 @@ impl App {
             changes_area: None,
             conflicts_area: None,
             config: Config::default(),
+            mouse_loc: (0, 0),
+            selected_change_index: None,
+            state: AppState::Main,
+            change_popup_area: None,
         }
     }
 
@@ -99,10 +113,8 @@ impl App {
         match self.events.next()? {
             Event::Tick => self.tick(),
             Event::Crossterm(event) => match event {
-                crossterm::event::Event::Key(key_event) => self.handle_key_event(key_event)?,
-                crossterm::event::Event::Mouse(mouse_event) => {
-                    self.handle_mouse_event(mouse_event)?
-                }
+                CtEvent::Key(key_event) => self.handle_key_event(key_event)?,
+                CtEvent::Mouse(mouse_event) => self.handle_mouse_event(mouse_event)?,
                 _ => {}
             },
             Event::App(app_event) => match app_event {
@@ -128,12 +140,12 @@ impl App {
                     Some(AppSection::Conflicts) | None => {
                         self.selected_section = Some(AppSection::Changes)
                     }
+                    _ => {}
                 },
                 AppEvent::DeselectSection => self.selected_section = None,
-                AppEvent::Click { button, col, row } => self.handle_click(button, col, row),
-                AppEvent::MouseScroll { dir, col, row } => self.handle_mouse_scroll(dir, col, row),
                 AppEvent::NextChange => self.list_state.select_next(),
                 AppEvent::PrevChange => self.list_state.select_previous(),
+                AppEvent::SelectChange => self.state = AppState::ChangePopup,
             },
         }
         Ok(())
@@ -142,9 +154,7 @@ impl App {
     /// Handles the key events and updates the state of [`App`].
     fn handle_key_event(&mut self, key_event: KeyEvent) -> color_eyre::Result<()> {
         match key_event.code {
-            KeyCode::Esc if self.selected_section.is_some() => {
-                self.events.send(AppEvent::DeselectSection)
-            }
+            KeyCode::Esc if self.state != AppState::Main => self.state = AppState::Main,
             KeyCode::Esc | KeyCode::Char('q') => self.events.send(AppEvent::Quit),
             KeyCode::Char('c' | 'C') if key_event.modifiers == KeyModifiers::CONTROL => {
                 self.events.send(AppEvent::Quit)
@@ -155,14 +165,14 @@ impl App {
                     self.events.send(AppEvent::ConflictsScroll(Direction::Up))
                 }
                 Some(AppSection::Changes) => self.events.send(AppEvent::PrevChange),
-                None => {}
+                _ => {}
             },
             KeyCode::Down => match self.selected_section {
                 Some(AppSection::Conflicts) => {
                     self.events.send(AppEvent::ConflictsScroll(Direction::Down))
                 }
                 Some(AppSection::Changes) => self.events.send(AppEvent::NextChange),
-                None => {}
+                _ => {}
             },
             KeyCode::Char('c') => self.events.send(AppEvent::ToggleSelectedSection),
             _ => {}
@@ -172,21 +182,10 @@ impl App {
 
     fn handle_mouse_event(&mut self, mouse_event: MouseEvent) -> color_eyre::Result<()> {
         match mouse_event.kind {
-            MouseEventKind::Down(btn) => self.events.send(AppEvent::Click {
-                button: btn,
-                col: mouse_event.column,
-                row: mouse_event.row,
-            }),
-            MouseEventKind::ScrollDown => self.events.send(AppEvent::MouseScroll {
-                dir: Direction::Down,
-                col: mouse_event.column,
-                row: mouse_event.row,
-            }),
-            MouseEventKind::ScrollUp => self.events.send(AppEvent::MouseScroll {
-                dir: Direction::Up,
-                col: mouse_event.column,
-                row: mouse_event.row,
-            }),
+            MouseEventKind::Down(btn) => self.handle_click(btn),
+            MouseEventKind::ScrollDown => self.handle_mouse_scroll(Direction::Down),
+            MouseEventKind::ScrollUp => self.handle_mouse_scroll(Direction::Up),
+            MouseEventKind::Moved => self.handle_mouse_move((mouse_event.row, mouse_event.column)),
             _ => {}
         }
         Ok(())
@@ -222,22 +221,45 @@ impl App {
         };
     }
 
-    fn handle_click(&mut self, button: MouseButton, col: u16, row: u16) {
-        if button == MouseButton::Left {
-            let section = self.current_mouse_section((row, col));
-            if let Some(AppSection::Changes) = section {
+    /// Handles any mouse clicks within the UI.
+    fn handle_click(&mut self, _button: MouseButton) {
+        let section = self.current_mouse_section();
+        match section {
+            Some(AppSection::Changes) => {
                 if let Some(rect) = self.changes_area {
-                    let offset = row - rect.y;
+                    let offset = self.mouse_loc.0 - rect.y;
                     let index = (offset as usize + self.list_state.offset()).saturating_sub(1);
-                    *self.list_state.selected_mut() = Some(index);
+                    if self.list_state.selected() == Some(index) {
+                        self.state = AppState::ChangePopup;
+                    } else {
+                        self.state = AppState::Main;
+                    }
+                    if index <= self.file_list.renderable().len() {
+                        *self.list_state.selected_mut() = Some(index);
+                    } else {
+                        *self.list_state.selected_mut() = None;
+                    }
                 }
             }
-            self.selected_section = section;
+            Some(AppSection::ChangePopup) => {}
+            _ => {
+                *self.list_state.selected_mut() = None;
+                self.state = AppState::Main;
+            }
+        }
+        self.selected_section = section;
+    }
+
+    pub fn get_selected_change(&self) -> Option<&ParsedStatusLine> {
+        if let Some(index) = self.list_state.selected() {
+            self.file_list.get(index)
+        } else {
+            None
         }
     }
 
-    fn handle_mouse_scroll(&mut self, dir: Direction, col: u16, row: u16) {
-        match self.current_mouse_section((row, col)) {
+    fn handle_mouse_scroll(&mut self, dir: Direction) {
+        match self.current_mouse_section() {
             Some(AppSection::Changes) => {
                 if let Some(selected) = self.list_state.selected_mut() {
                     handle_scroll(&dir, selected, &mut self.changes_scrollbar_state)
@@ -248,22 +270,32 @@ impl App {
                 &mut self.conflicts_scroll_offset,
                 &mut self.conflicts_scrollbar_state,
             ),
-            None => {}
+            _ => {}
         }
     }
 
-    fn current_mouse_section(&self, (row, col): (u16, u16)) -> Option<AppSection> {
+    fn current_mouse_section(&self) -> Option<AppSection> {
         for (area, app_section) in [
+            // this needs to be in the order that popups/dialogs sit above section in Main, as the rects for each section are still Some(_) even wh en popups are above them
+            (self.change_popup_area, AppSection::ChangePopup),
             (self.changes_area, AppSection::Changes),
             (self.conflicts_area, AppSection::Conflicts),
         ] {
             if let Some(area) = area {
-                if area.contains((col, row).into()) {
+                let pos = Position {
+                    x: self.mouse_loc.1,
+                    y: self.mouse_loc.0,
+                };
+                if area.contains(pos) {
                     return Some(app_section);
                 }
             }
         }
         None
+    }
+
+    fn handle_mouse_move(&mut self, pos: (u16, u16)) {
+        self.mouse_loc = pos;
     }
 }
 
@@ -284,4 +316,5 @@ fn time_for_update(last_updated: DateTime<Utc>, timeout: u8) -> bool {
 pub enum AppSection {
     Changes,
     Conflicts,
+    ChangePopup,
 }

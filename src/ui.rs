@@ -2,26 +2,31 @@ use std::{ffi::OsStr, path::PathBuf};
 
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout, Margin, Rect},
+    layout::{Constraint, Flex, Layout, Margin, Rect},
     style::{Color, Modifier, Style, Stylize},
     text::{Line, Span, Text},
-    widgets::{Block, List, Paragraph, Scrollbar, ScrollbarOrientation},
+    widgets::{Block, Clear, List, Paragraph, Scrollbar, ScrollbarOrientation},
 };
 
 use crate::{
-    app::App,
+    app::{App, AppSection, AppState},
     svn::{self, Conflict, ParsedStatusLine, state::State},
 };
 
 impl App {
     pub fn draw(&mut self, frame: &mut Frame) {
-        let has_conflicts: bool = self.file_list.has_conflicts();
+        let should_render_conflicts: bool = self.file_list.has_conflicts()
+            && self
+                .get_selected_change()
+                .as_ref()
+                .is_some_and(|change| change.0 == State::Conflicting);
+        let should_render_change_popup = self.state == AppState::ChangePopup;
         let mut constraints = vec![
             Constraint::Length(4),
             Constraint::Fill(1),
-            Constraint::Length(1),
+            // Constraint::Length(1),
         ];
-        if has_conflicts {
+        if should_render_conflicts {
             constraints.insert(2, Constraint::Percentage(20));
         }
         let layout = Layout::vertical(constraints).split(frame.area());
@@ -30,11 +35,24 @@ impl App {
         i += 1;
         self.render_file_list(frame, layout[i]);
         i += 1;
-        if has_conflicts {
+        if should_render_conflicts {
             self.render_conflicts(frame, layout[i]);
-            i += 1;
+            // i += 1;
         }
-        self.render_help(frame, layout[i]);
+        if should_render_change_popup {
+            self.render_change_popup(frame);
+        }
+        // self.render_help(frame, layout[i]);
+    }
+
+    fn render_change_popup(&mut self, frame: &mut Frame) {
+        let block = Block::bordered();
+        let mut constraints = vec![Constraint::Fill(1)];
+        let area = popup_area(frame.area(), 80, 20);
+        let popup_layout = Layout::vertical(constraints).split(area);
+        frame.render_widget(Clear, popup_layout[0]);
+        frame.render_widget(block, popup_layout[0]);
+        self.change_popup_area = Some(area);
     }
 
     fn render_conflicts(&mut self, frame: &mut Frame, area: Rect) {
@@ -51,8 +69,8 @@ impl App {
             .conflicts_scrollbar_state
             .content_length(conflict_texts.len());
         let mut block = Block::bordered().title("Conflicts");
-        if self.selected_section == Some(crate::app::AppSection::Conflicts) {
-            block = block.style(Color::White);
+        if self.selected_section == Some(AppSection::Conflicts) {
+            block = block.style(Color::Yellow);
         }
         let paragraph = Paragraph::new(conflict_texts)
             .block(block)
@@ -83,20 +101,21 @@ impl App {
     fn render_file_list(&mut self, frame: &mut Frame, area: Rect) {
         let max_width = area.width - 3; // 1 each side for block borders, 1 for scrollbar
         let mut block = Block::bordered().title("Changes");
-        if self.selected_section == Some(crate::app::AppSection::Changes) {
-            block = block.style(Color::White);
+        if self.selected_section == Some(AppSection::Changes) {
+            block = block.style(Color::Yellow);
         }
         let list = List::new(
             self.file_list
                 .list()
                 .iter()
-                .filter(|(state, path)| {
-                    *state != State::Clean
-                        && !svn::is_conflict_part(path.to_str().expect("bad path"))
-                }) // TODO if we ever care about the list showing status columns 2+, this filter may need rmeoving
+                .filter(|(_, path)| !svn::is_conflict_part(path.to_str().expect("bad path")))
                 .map(|psl| create_file_list_item(psl, max_width)),
         )
-        .highlight_style(Style::new().bg(Color::DarkGray))
+        .highlight_style(
+            Style::new()
+                .bg(Color::from_u32(0x00222222))
+                .add_modifier(Modifier::BOLD),
+        )
         .scroll_padding(1)
         .block(block);
         self.changes_scrollbar_state = self.changes_scrollbar_state.content_length(list.len());
@@ -116,18 +135,18 @@ impl App {
         self.changes_area = Some(area);
     }
 
-    fn render_help(&self, frame: &mut Frame, area: Rect) {
-        let help = Line::from(vec![
-            Span::raw("Refresh <r|R> "),
-            Span::raw("Quit <q|Q> "),
-            Span::raw("Toggle section <Tab> "),
-        ])
-        .style(Color::Gray);
-        frame.render_widget(help, area);
-    }
+    // fn render_help(&self, frame: &mut Frame, area: Rect) {
+    //     let help = Line::from(vec![
+    //         Span::raw("Refresh <r|R> "),
+    //         Span::raw("Quit <q|Q> "),
+    //         Span::raw("Toggle section <Tab> "),
+    //     ])
+    //     .style(Color::Gray);
+    //     frame.render_widget(help, area);
+    // }
 }
 
-fn transform_conflict<'a>(conflict: &'a svn::Conflict, max_width: u16) -> Vec<Line<'a>> {
+fn transform_conflict<'a>(conflict: &'a Conflict, max_width: u16) -> Vec<Line<'a>> {
     let make_line = |p: &'a PathBuf, color: Color| {
         let mut text = p.to_str().expect("bad path").to_string();
         if text.len() as u16 > max_width {
@@ -193,9 +212,22 @@ fn create_file_list_item<'a>((state, path): &'a ParsedStatusLine, max_width: u16
             filename.push_str("...");
         }
     }
+    let path_color = match state {
+        State::Clean => Color::DarkGray,
+        _ => Color::Reset,
+    };
     Line::from(vec![
         state_span,
         Span::raw(spacer),
-        Span::raw(filename).fg(Color::Reset),
+        Span::raw(filename).fg(path_color),
     ])
+}
+
+/// helper function to create a centered rect using up certain percentage of the available rect `r`
+fn popup_area(area: Rect, percent_x: u16, percent_y: u16) -> Rect {
+    let vertical = Layout::vertical([Constraint::Percentage(percent_y)]).flex(Flex::Center);
+    let horizontal = Layout::horizontal([Constraint::Percentage(percent_x)]).flex(Flex::Center);
+    let [area] = vertical.areas(area);
+    let [area] = horizontal.areas(area);
+    area
 }

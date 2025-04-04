@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, path::PathBuf};
 
 use super::{
     Conflict, ConflictPart, ParsedStatusLine, create_empty_text_conflict, is_conflict_part,
@@ -60,6 +60,20 @@ impl FileList {
     pub fn has_conflicts(&self) -> bool {
         self.0.iter().any(|(state, _)| *state == State::Conflicting)
     }
+
+    pub(crate) fn get(&self, index: usize) -> Option<&(State, PathBuf)> {
+        self.0
+            .iter()
+            .filter(|(_, path)| !is_conflict_part(path.to_str().unwrap()))
+            .nth(index)
+    }
+
+    pub(crate) fn renderable(&self) -> Vec<&ParsedStatusLine> {
+        self.list()
+            .iter()
+            .filter(|(_, path)| !is_conflict_part(path.to_str().unwrap()))
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -110,5 +124,24 @@ Summary of conflicts:
             }],
             l.conflicts()
         );
+    }
+
+    #[test]
+    fn can_get_changes_correctly() {
+        let svn_output = "C       dir1/file3.txt
+?       dir1/file3.txt.merge-left.r8
+?       dir1/file3.txt.merge-right.r10
+?       dir1/file3.txt.working
+A  +    dir1/newfile.txt
+M       dir2/nested1/file5.txt
+D       file2.txt
+A  +    newfile.txt
+Summary of conflicts:
+  Text conflicts: 1
+";
+        let mut l = FileList::empty();
+        l.populate_from_svn_status(svn_output)
+            .expect("failed to populate");
+        assert_eq!(Some(&l.list()[5]), l.get(2)) // the get method skips the conflict parts
     }
 }
