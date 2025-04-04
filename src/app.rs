@@ -240,6 +240,7 @@ impl App {
                     if button == MouseButton::Right {
                         if index <= self.file_list.renderable().len() {
                             *self.list_state.selected_mut() = Some(index);
+                            self.change_popup_area = None;
                             self.state = AppState::ChangePopup;
                         }
                     } else {

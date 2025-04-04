@@ -72,7 +72,7 @@ impl App {
         let constraints = vec![Constraint::Length(3); buttons.len()];
         let area = self.change_popup_area.unwrap_or({
             let (row, col) = self.mouse_loc;
-            let width = std::cmp::min(40, frame.area().width - col - 2);
+            let width = std::cmp::min(20, frame.area().width - col - 2);
             let height = std::cmp::min(buttons.len() as u16 * 3 + 2, frame.area().height - row - 2);
             Rect {
                 x: col,
@@ -81,19 +81,26 @@ impl App {
                 height,
             }
         });
-        frame.render_widget(Clear, area); // clear the popup area
-        let layout = Layout::vertical(constraints).split(area.inner(Margin {
-            horizontal: 1,
-            vertical: 1,
-        }));
-        for i in 0..buttons.len() {
-            frame.render_widget(
-                buttons.pop().expect("We somehow ran out of buttons?"),
-                layout[i],
-            );
+        if area.width + area.x > frame.area().width {
+            // stop the panic if terminal shrunk by closing the popup
+            self.change_popup_area = None;
+            self.state = AppState::Main;
+        } else {
+            // RENDERING STARTS HERE
+            frame.render_widget(Clear, area); // clear the popup area
+            let layout = Layout::vertical(constraints).split(area.inner(Margin {
+                horizontal: 1,
+                vertical: 1,
+            }));
+            for i in 0..buttons.len() {
+                frame.render_widget(
+                    buttons.pop().expect("We somehow ran out of buttons?"),
+                    layout[i],
+                );
+            }
+            frame.render_widget(popup, area);
+            self.change_popup_area = Some(area);
         }
-        frame.render_widget(popup, area);
-        self.change_popup_area = Some(area);
     }
 
     fn render_conflicts(&mut self, frame: &mut Frame, area: Rect) {
