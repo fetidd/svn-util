@@ -1,13 +1,11 @@
-use std::{ffi::OsStr, path::PathBuf};
-
-use color_eyre::owo_colors::OwoColorize;
 use ratatui::{
     Frame,
-    layout::{Constraint, Flex, Layout, Margin, Rect},
+    layout::{Constraint, Layout, Margin, Rect},
     style::{Color, Modifier, Style, Stylize},
     text::{Line, Span, Text},
     widgets::{Block, Clear, List, Paragraph, Scrollbar, ScrollbarOrientation},
 };
+use std::{ffi::OsStr, path::PathBuf};
 
 use crate::{
     app::{App, AppSection, AppState},
@@ -264,13 +262,4 @@ fn create_file_list_item<'a>((state, path): &'a ParsedStatusLine, max_width: u16
         Span::raw(spacer),
         Span::raw(filename).fg(path_color),
     ])
-}
-
-/// helper function to create a centered rect using up certain percentage of the available rect `r`
-fn popup_area(area: Rect, width: u16, height: u16) -> Rect {
-    let vertical = Layout::vertical([Constraint::Length(height)]);
-    let horizontal = Layout::horizontal([Constraint::Length(width)]);
-    let [area] = vertical.areas(area);
-    let [area] = horizontal.areas(area);
-    area
 }

@@ -1,3 +1,5 @@
+mod ui;
+
 use std::path::PathBuf;
 
 use crate::{
@@ -17,33 +19,32 @@ use ratatui::{
 #[derive(Debug)]
 pub struct App {
     /// Is the app running, used to decide if we should quit
-    pub running: bool,
+    running: bool,
     /// Event handler in a background thread
-    pub events: EventHandler,
+    events: EventHandler,
     /// The name of the current branch
-    pub current_branch: String,
+    current_branch: String,
     /// The output from 'svn status'
-    pub file_list: svn::FileList,
+    file_list: svn::FileList,
     /// The state of the displayed changes list
-    pub list_state: ListState,
-    pub selected_change_index: Option<usize>,
+    list_state: ListState,
     /// The last time 'svn status' was run
-    pub last_updated: DateTime<Utc>,
+    last_updated: DateTime<Utc>,
     /// The current working directory
-    pub cwd: PathBuf,
-    pub changes_scrollbar_state: ScrollbarState,
-    pub conflicts_scrollbar_state: ScrollbarState,
-    pub conflicts_scroll_offset: usize,
-    pub selected_section: Option<AppSection>,
+    cwd: PathBuf,
+    changes_scrollbar_state: ScrollbarState,
+    conflicts_scrollbar_state: ScrollbarState,
+    conflicts_scroll_offset: usize,
+    selected_section: Option<AppSection>,
     // UI areas mainly used for mouse clicks etc.
-    pub changes_area: Option<Rect>,
-    pub conflicts_area: Option<Rect>,
-    pub change_popup_area: Option<Rect>,
-    pub config: Config,
-    pub mouse_loc: (u16, u16), // row, col
-    pub state: AppState,
+    changes_area: Option<Rect>,
+    conflicts_area: Option<Rect>,
+    change_popup_area: Option<Rect>,
+    config: Config,
+    mouse_loc: (u16, u16), // row, col
+    state: AppState,
 
-    pub last_message: String,
+    last_message: String,
 }
 
 #[derive(Debug, PartialEq)]
@@ -92,7 +93,6 @@ impl App {
             conflicts_area: None,
             config: Config::default(),
             mouse_loc: (0, 0),
-            selected_change_index: None,
             state: AppState::Main,
             change_popup_area: None,
             last_message: String::new(),
@@ -266,7 +266,7 @@ impl App {
         self.selected_section = section;
     }
 
-    pub fn get_selected_change(&self) -> Option<&ParsedStatusLine> {
+    fn get_selected_change(&self) -> Option<&ParsedStatusLine> {
         if let Some(index) = self.list_state.selected() {
             self.file_list.get(index)
         } else {

@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_variables)]
 use std::path::PathBuf;
 
 use super::state::State;
