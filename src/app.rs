@@ -62,28 +62,17 @@ impl Default for App {
 impl App {
     /// Constructs a new instance of [`App`].
     pub fn new() -> Self {
-        let cwd = std::env::current_dir()
-            .expect("does this directory exist? do you have permissions on this dir?");
-        let current_branch = match svn::get_branch_name(&cwd) {
-            Ok(branch) => branch,
-            Err(e) => panic!("Issue in App creation: {e}"),
-        };
-        let mut file_list = svn::FileList::empty();
-        if let Ok(status) = svn::get_svn_status(&cwd) {
-            file_list
-                .populate_from_svn_status(&status)
-                .expect("failed to populate from svn status");
-        }
+        let file_list = svn::FileList::empty();
         let list_state = ListState::default().with_selected(Some(0));
         let changes_scrollbar_state = ScrollbarState::default();
         let conflicts_scrollbar_state = ScrollbarState::default();
         Self {
             running: true,
             events: EventHandler::new(),
-            current_branch,
+            current_branch: String::new(),
             file_list,
             last_updated: Utc::now(),
-            cwd,
+            cwd: PathBuf::new(),
             list_state,
             changes_scrollbar_state,
             conflicts_scrollbar_state,
@@ -105,6 +94,17 @@ impl App {
 
     /// Run the application's main loop.
     pub fn run(mut self, mut terminal: DefaultTerminal) -> color_eyre::Result<()> {
+        let cwd = std::env::current_dir()
+            .expect("does this directory exist? do you have permissions on this dir?");
+        self.current_branch = match svn::get_branch_name(&cwd) {
+            Ok(branch) => branch,
+            Err(e) => panic!("Issue in App creation: {e}"),
+        };
+        if let Ok(status) = svn::get_svn_status(&cwd) {
+            self.file_list
+                .populate_from_svn_status(&status)
+                .expect("failed to populate from svn status");
+        }
         while self.running {
             terminal.draw(|frame| self.draw(frame))?;
             self.handle_events()?;
@@ -118,6 +118,15 @@ impl App {
             Event::Crossterm(event) => match event {
                 CtEvent::Key(key_event) => self.handle_key_event(key_event)?,
                 CtEvent::Mouse(mouse_event) => self.handle_mouse_event(mouse_event)?,
+                CtEvent::FocusLost => {
+                    self.close_change_popup();
+                    self.selected_section = None;
+                    *self.list_state.selected_mut() = None;
+                }
+                CtEvent::FocusGained => {
+                    self.update_branch_name();
+                    self.update_svn_status();
+                }
                 _ => {}
             },
             Event::App(app_event) => match app_event {
@@ -136,15 +145,6 @@ impl App {
                     self.list_state.offset_mut(),
                     &mut self.changes_scrollbar_state,
                 ),
-                AppEvent::ToggleSelectedSection => match self.selected_section {
-                    Some(AppSection::Changes) => {
-                        self.selected_section = Some(AppSection::Conflicts)
-                    }
-                    Some(AppSection::Conflicts) | None => {
-                        self.selected_section = Some(AppSection::Changes)
-                    }
-                    _ => {}
-                },
                 AppEvent::DeselectSection => self.selected_section = None,
                 AppEvent::NextChange => self.list_state.select_next(),
                 AppEvent::PrevChange => self.list_state.select_previous(),
@@ -178,18 +178,18 @@ impl App {
                 Some(AppSection::Changes) => self.events.send(AppEvent::NextChange),
                 _ => {}
             },
-            KeyCode::Char('c') => self.events.send(AppEvent::ToggleSelectedSection),
             _ => {}
         }
         Ok(())
     }
 
     fn handle_mouse_event(&mut self, mouse_event: MouseEvent) -> color_eyre::Result<()> {
+        self.mouse_loc = (mouse_event.row, mouse_event.column);
         match mouse_event.kind {
             MouseEventKind::Down(btn) => self.handle_click(btn),
             MouseEventKind::ScrollDown => self.handle_mouse_scroll(Direction::Down),
             MouseEventKind::ScrollUp => self.handle_mouse_scroll(Direction::Up),
-            MouseEventKind::Moved => self.handle_mouse_move((mouse_event.row, mouse_event.column)),
+            MouseEventKind::Moved => self.handle_mouse_move(),
             _ => {}
         }
         Ok(())
@@ -221,7 +221,7 @@ impl App {
     fn update_branch_name(&mut self) {
         self.current_branch = match svn::get_branch_name(&self.cwd) {
             Ok(branch) => branch,
-            Err(e) => e.message,
+            Err(e) => e.to_string(),
         };
     }
 
@@ -244,8 +244,7 @@ impl App {
                             self.state = AppState::ChangePopup;
                         }
                     } else {
-                        self.state = AppState::Main;
-                        self.change_popup_area = None;
+                        self.close_change_popup();
                     }
                     if button == MouseButton::Left {
                         if index <= self.file_list.renderable().len() {
@@ -259,11 +258,15 @@ impl App {
             Some(AppSection::ChangePopup) => {}
             _ => {
                 *self.list_state.selected_mut() = None;
-                self.state = AppState::Main;
-                self.change_popup_area = None;
+                self.close_change_popup();
             }
         }
         self.selected_section = section;
+    }
+
+    fn close_change_popup(&mut self) {
+        self.state = AppState::Main;
+        self.change_popup_area = None;
     }
 
     fn get_selected_change(&self) -> Option<&ParsedStatusLine> {
@@ -292,7 +295,8 @@ impl App {
 
     fn current_mouse_section(&self) -> Option<AppSection> {
         for (area, app_section) in [
-            // this needs to be in the order that popups/dialogs sit above section in Main, as the rects for each section are still Some(_) even wh en popups are above them
+            // this needs to be in the order that popups/dialogs sit above section in Main,
+            // as the rects for each section are still Some(_) even wh en popups are above them
             (self.change_popup_area, AppSection::ChangePopup),
             (self.changes_area, AppSection::Changes),
             (self.conflicts_area, AppSection::Conflicts),
@@ -310,9 +314,7 @@ impl App {
         None
     }
 
-    fn handle_mouse_move(&mut self, pos: (u16, u16)) {
-        self.mouse_loc = pos;
-    }
+    fn handle_mouse_move(&mut self) {}
 }
 
 fn handle_scroll(dir: &Direction, offset: &mut usize, bar_state: &mut ScrollbarState) {
@@ -333,4 +335,141 @@ pub enum AppSection {
     Changes,
     Conflicts,
     ChangePopup,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeDelta;
+    use rstest::*;
+    use svn::state::State;
+
+    fn rect(loc: u16) -> Rect {
+        Rect {
+            x: loc,
+            y: loc,
+            width: 1,
+            height: 1,
+        }
+    }
+
+    #[test]
+    fn test_handle_click() {
+        let mut a = App::new();
+        a.changes_area = Some(Rect {
+            x: 0,
+            y: 0,
+            width: 1,
+            height: 5,
+        });
+        let file_list = vec![
+            (State::Modified, PathBuf::from("path1")),
+            (State::Modified, PathBuf::from("path2")),
+            (State::Modified, PathBuf::from("path3")),
+        ];
+        *a.file_list.list_mut() = file_list.clone();
+        a.list_state = ListState::default();
+
+        a.mouse_loc = (3, 0);
+        a.handle_click(MouseButton::Left);
+        a.handle_events();
+
+        assert_eq!(a.state, AppState::Main);
+        assert_eq!(a.change_popup_area, None);
+        assert_eq!(a.list_state.selected(), Some(2));
+        assert_eq!(a.get_selected_change(), Some(&file_list[2]))
+    }
+
+    #[rstest]
+    #[case(Direction::Down, 0, 0, Some(0), 0, 0, Some(1), 1)]
+    #[case(Direction::Down, 1, 0, Some(0), 1, 0, Some(1), 1)]
+    #[case(Direction::Down, 1, 0, Some(1), 0, 0, Some(2), 2)]
+    fn test_handle_mouse_scroll_changes_section(
+        #[case] dir: Direction,
+        #[case] cont_length: usize,
+        #[case] offset: usize,
+        #[case] selected: Option<usize>,
+        #[case] position: usize,
+        #[case] exp_offset: usize,
+        #[case] exp_selected: Option<usize>,
+        #[case] exp_position: usize,
+    ) {
+        let mut a = App::new();
+        a.mouse_loc = (0, 0);
+        a.changes_area = Some(rect(0));
+        a.list_state = a.list_state.with_offset(offset).with_selected(selected);
+        a.changes_scrollbar_state = a
+            .changes_scrollbar_state
+            .content_length(cont_length)
+            .position(position);
+        let exp_list_state = ListState::default()
+            .with_offset(exp_offset)
+            .with_selected(exp_selected);
+        let exp_scroll_state = ScrollbarState::new(cont_length).position(exp_position);
+        a.handle_mouse_scroll(dir);
+        assert_eq!(exp_list_state, a.list_state);
+        assert_eq!(exp_scroll_state, a.changes_scrollbar_state);
+    }
+
+    #[rstest]
+    #[case(Some(rect(0)), None, None, (0, 0), Some(AppSection::Changes))]
+    #[case(None, Some(rect(1)), None, (1, 1), Some(AppSection::Conflicts))]
+    #[case(None, None, Some(rect(2)), (2, 2), Some(AppSection::ChangePopup))]
+    #[case(Some(rect(0)), None, Some(rect(0)), (0, 0), Some(AppSection::ChangePopup))]
+    #[case(Some(rect(0)), Some(rect(1)), Some(rect(2)), (3, 3), None)]
+    fn test_current_mouse_section(
+        #[case] changes: Option<Rect>,
+        #[case] conflicts: Option<Rect>,
+        #[case] change_popup: Option<Rect>,
+        #[case] loc: (u16, u16),
+        #[case] expected: Option<AppSection>,
+    ) {
+        let mut a = App::new();
+        a.changes_area = changes;
+        a.conflicts_area = conflicts;
+        a.change_popup_area = change_popup;
+        a.mouse_loc = loc;
+        assert_eq!(expected, a.current_mouse_section());
+    }
+
+    #[rstest]
+    #[case(-3, 5, false)]
+    #[case(-4, 5, false)]
+    #[case(-5, 5, false)]
+    #[case(-6, 5, true)]
+    fn test_time_for_update(
+        #[case] last_updated: i64,
+        #[case] timeout: u8,
+        #[case] expected: bool,
+    ) {
+        let last_updated = Utc::now().checked_add_signed(TimeDelta::seconds(last_updated));
+        assert_eq!(expected, time_for_update(last_updated.unwrap(), timeout));
+    }
+
+    #[rstest]
+    #[case(1, 2, Direction::Up, 1)]
+    #[case(1, 1, Direction::Up, 0)]
+    #[case(1, 0, Direction::Up, 0)]
+    #[case(1, 2, Direction::Down, 3)]
+    #[case(1, 1, Direction::Down, 2)]
+    #[case(1, 0, Direction::Down, 1)]
+    #[case(2, 2, Direction::Down, 3)]
+    #[case(2, 1, Direction::Down, 2)]
+    #[case(2, 0, Direction::Down, 1)]
+    fn test_handle_scroll(
+        #[case] start_pos: usize,
+        #[case] offset: usize,
+        #[case] dir: Direction,
+        #[case] exp_offset: usize,
+    ) {
+        let mut scroll_state = ScrollbarState::new(3).position(start_pos);
+        let mut offset = offset;
+        handle_scroll(&dir, &mut offset, &mut scroll_state);
+        assert_eq!(exp_offset, offset, "offset = {offset:?}");
+        assert_eq!(
+            ScrollbarState::new(3).position(offset),
+            scroll_state,
+            "state = {scroll_state:?}"
+        );
+    }
 }

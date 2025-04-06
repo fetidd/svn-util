@@ -5,26 +5,32 @@ use super::{
     parse_conflict_part, parse_svn_status, state::State, trim_conflict_suffix,
 };
 
-#[derive(Debug, Clone)]
-pub struct FileList(Vec<ParsedStatusLine>);
+#[derive(Debug, Clone, PartialEq)]
+pub struct FileList {
+    list: Vec<ParsedStatusLine>,
+}
 
 impl FileList {
     pub fn list(&self) -> &[ParsedStatusLine] {
-        &self.0
+        &self.list
+    }
+
+    pub fn list_mut(&mut self) -> &mut Vec<ParsedStatusLine> {
+        &mut self.list
     }
 
     pub fn empty() -> Self {
-        Self(vec![])
+        Self { list: vec![] }
     }
 
-    pub fn populate_from_svn_status(&mut self, svn_status: &str) -> Result<(), ()> {
-        self.0 = parse_svn_status(svn_status)?;
+    pub fn populate_from_svn_status(&mut self, svn_status: &str) -> super::Result<()> {
+        *self.list_mut() = parse_svn_status(svn_status)?;
         Ok(())
     }
 
     pub fn conflicts(&self) -> Vec<Conflict> {
         let mut conflict_map = HashMap::new();
-        for (state, path) in self.0.iter() {
+        for (state, path) in self.list().iter() {
             let path_str = &path.to_str().expect("bad path");
             if *state == State::Conflicting && !conflict_map.contains_key(path_str) {
                 conflict_map.insert(*path_str, create_empty_text_conflict(path));
@@ -58,17 +64,19 @@ impl FileList {
     }
 
     pub fn has_conflicts(&self) -> bool {
-        self.0.iter().any(|(state, _)| *state == State::Conflicting)
+        self.list()
+            .iter()
+            .any(|(state, _)| *state == State::Conflicting)
     }
 
-    pub(crate) fn get(&self, index: usize) -> Option<&(State, PathBuf)> {
-        self.0
+    pub fn get(&self, index: usize) -> Option<&(State, PathBuf)> {
+        self.list()
             .iter()
             .filter(|(_, path)| !is_conflict_part(path.to_str().unwrap()))
             .nth(index)
     }
 
-    pub(crate) fn renderable(&self) -> Vec<&ParsedStatusLine> {
+    pub fn renderable(&self) -> Vec<&ParsedStatusLine> {
         self.list()
             .iter()
             .filter(|(_, path)| !is_conflict_part(path.to_str().unwrap()))
@@ -78,9 +86,9 @@ impl FileList {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
+    use super::State::*;
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn can_populate_from_svn_output() {
@@ -90,11 +98,35 @@ M       dir1/file2.txt
 M       dir1/nested1/file3.txt
 A       dir2/newfile1.txt
 A       dir2/newimage.png
+ M      .
+R       replaced.txt
+!       missing.txt
+?       new.txt
+D       deleted.txt
+C       conflict.txt
 ";
         let mut l = FileList::empty();
         l.populate_from_svn_status(svn_output)
             .expect("failed to populate");
-        assert_eq!(false, l.has_conflicts());
+        assert_eq!(true, l.has_conflicts());
+        assert_eq!(
+            l,
+            FileList {
+                list: vec![
+                    (Modified, "file1.txt".into()),
+                    (Modified, "dir1/file2.txt".into()),
+                    (Modified, "dir1/nested1/file3.txt".into()),
+                    (Added, "dir2/newfile1.txt".into()),
+                    (Added, "dir2/newimage.png".into()),
+                    (Clean, ".".into()),
+                    (Replaced, "replaced.txt".into()),
+                    (Missing, "missing.txt".into()),
+                    (Unversioned, "new.txt".into()),
+                    (Deleted, "deleted.txt".into()),
+                    (Conflicting, "conflict.txt".into()),
+                ]
+            }
+        )
     }
 
     #[test]
@@ -142,6 +174,8 @@ Summary of conflicts:
         let mut l = FileList::empty();
         l.populate_from_svn_status(svn_output)
             .expect("failed to populate");
-        assert_eq!(Some(&l.list()[5]), l.get(2)) // the get method skips the conflict parts
+        assert!(l.has_conflicts());
+        assert_eq!(Some(&l.list()[5]), l.get(2)); // the get method skips the conflict parts
+        assert_eq!(Some(&l.list()[0]), l.get(0));
     }
 }

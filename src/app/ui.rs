@@ -12,8 +12,15 @@ use crate::{
     svn::{self, Conflict, ParsedStatusLine, state::State},
 };
 
+const MINIMUM_UI_WIDTH: u16 = 15;
+
 impl App {
     pub fn draw(&mut self, frame: &mut Frame) {
+        if frame.area().width < MINIMUM_UI_WIDTH {
+            // guard against the ui being too narrow
+            frame.render_widget(Span::raw("too small"), frame.area());
+            return;
+        }
         let should_render_conflicts: bool = self.file_list.has_conflicts()
             && self
                 .get_selected_change()
@@ -44,61 +51,61 @@ impl App {
         self.render_message_box(frame, layout[i]);
     }
 
-    fn render_change_popup<'a>(&'a mut self, frame: &mut Frame) {
+    fn calculate_popup_rect(&self, buttons: &[Text], allowed_area: Rect) -> Rect {
+        let (row, mut col) = self.mouse_loc;
+        let width = (buttons
+            .iter()
+            .map(|b| b.to_string().len()) // TODO this allocates String for each button, maybe have the list items know their lengths?
+            .max()
+            .expect("buttons was somehow empty?")
+            + 3) as u16; // 3 is some padding at the end
+        let height = buttons.len() as u16;
+        if col + width >= allowed_area.width {
+            col = col.saturating_sub((col + width) - allowed_area.width);
+        }
+        Rect {
+            x: col,
+            y: row,
+            width,
+            height,
+        }
+    }
+
+    fn render_change_popup(&mut self, frame: &mut Frame) {
         self.selected_section = Some(AppSection::ChangePopup);
-        let (state, path_buf) = self
+        let (state, _) = self
             .get_selected_change()
             .expect("Somehow opened a changed popup without a selected change?!");
-        let path = path_buf.file_name().unwrap().to_str().unwrap();
-        let popup = Block::bordered().title(path);
-        let button = |title: &'a str, color: Color| {
-            Paragraph::new(title)
-                .centered()
-                .block(Block::bordered())
-                .fg(color)
-        };
-        let mut buttons = vec![button("Open", Color::Reset)];
+        let popup = Block::new().bg(Color::DarkGray);
+        let button = |title: &'static str, color: Color| Text::raw(title).style(color);
+        let mut buttons = vec![button("Open", Color::LightBlue)];
         if state.is_deletable() {
-            buttons.push(button("Delete", Color::Red));
+            buttons.push(button("Delete", Color::LightRed));
         }
         if state.is_revertable() {
-            buttons.push(button("Revert", Color::Yellow));
+            buttons.push(button("Revert", Color::LightYellow));
         }
         if state.is_commitable() {
-            buttons.push(button("Commit", Color::Green));
+            buttons.push(button("Commit", Color::LightGreen));
         }
         let constraints = vec![Constraint::Length(3); buttons.len()];
-        let area = self.change_popup_area.unwrap_or({
-            let (row, col) = self.mouse_loc;
-            let width = std::cmp::min(20, frame.area().width - col - 2);
-            let height = std::cmp::min(buttons.len() as u16 * 3 + 2, frame.area().height - row - 2);
-            Rect {
-                x: col,
-                y: row,
-                width,
-                height,
-            }
-        });
-        if area.width + area.x > frame.area().width {
-            // stop the panic if terminal shrunk by closing the popup
-            self.change_popup_area = None;
-            self.state = AppState::Main;
-        } else {
-            // RENDERING STARTS HERE
-            frame.render_widget(Clear, area); // clear the popup area
-            let layout = Layout::vertical(constraints).split(area.inner(Margin {
-                horizontal: 1,
-                vertical: 1,
-            }));
-            for i in 0..buttons.len() {
-                frame.render_widget(
-                    buttons.pop().expect("We somehow ran out of buttons?"),
-                    layout[i],
-                );
-            }
-            frame.render_widget(popup, area);
-            self.change_popup_area = Some(area);
+        let popup_area = self
+            .change_popup_area
+            .unwrap_or(self.calculate_popup_rect(&buttons, frame.area()));
+        // RENDERING STARTS HERE
+        frame.render_widget(Clear, popup_area); // clear the popup area
+        let layout = Layout::vertical(constraints).split(popup_area.inner(Margin {
+            horizontal: 1,
+            vertical: 0,
+        }));
+        for i in 0..buttons.len() {
+            frame.render_widget(
+                buttons.pop().expect("We somehow ran out of buttons?"),
+                layout[i],
+            );
         }
+        frame.render_widget(popup, popup_area);
+        self.change_popup_area = Some(popup_area);
     }
 
     fn render_conflicts(&mut self, frame: &mut Frame, area: Rect) {
@@ -159,7 +166,8 @@ impl App {
         )
         .highlight_style(
             Style::new()
-                .bg(Color::from_u32(0x00222222))
+                .fg(Color::from_u32(0x00222222))
+                .bg(Color::Gray)
                 .add_modifier(Modifier::BOLD),
         )
         .scroll_padding(1)
@@ -247,7 +255,7 @@ fn create_file_list_item<'a>((state, path): &'a ParsedStatusLine, max_width: u16
         if (state_span.width() + spacer.len() + filename.len()) as u16 >= max_width {
             filename = filename
                 .split_at_checked((max_width - 3) as usize)
-                .expect("we should always be able to split here")
+                .unwrap_or(("", ""))
                 .0
                 .to_string();
             filename.push_str("...");
@@ -262,4 +270,58 @@ fn create_file_list_item<'a>((state, path): &'a ParsedStatusLine, max_width: u16
         Span::raw(spacer),
         Span::raw(filename).fg(path_color),
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use State::*;
+    use rstest::*;
+
+    #[rstest]
+    #[case(Modified, "path/to/file.txt", 20, "M", "file.txt", Color::Yellow)]
+    #[case(Added, "path/to/file.txt", 20, "A", "file.txt", Color::Green)]
+    #[case(Deleted, "path/to/file.txt", 20, "D", "file.txt", Color::Red)]
+    // #[case(Missing, "path/to/file.txt", 20, "!", "file.txt", Color::Red)]
+    #[case(
+        Conflicting,
+        "path/to/file.txt",
+        20,
+        "C",
+        "file.txt",
+        Color::LightMagenta
+    )]
+    #[case(Replaced, "path/to/file.txt", 20, "R", "file.txt", Color::Cyan)]
+    // #[case(Clean, "path/to/file.txt", 20, " ", "file.txt", Color::DarkGray)]
+    #[case(Unversioned, "path/to/file.txt", 20, "?", "file.txt", Color::White)]
+    #[case(Modified, "path/to/file.txt", 10, "M", "file.tx...", Color::Yellow)]
+    #[case(
+        Modified,
+        "path/to/file.txt",
+        100,
+        "M",
+        "path/to/file.txt",
+        Color::Yellow
+    )]
+    fn test_create_file_list_item(
+        #[case] state: State,
+        #[case] path: &str,
+        #[case] max_width: u16,
+        #[case] exp_state: &str,
+        #[case] exp_path: &str,
+        #[case] exp_color: Color,
+    ) {
+        let psl = (state, path.into());
+        let actual = create_file_list_item(&psl, max_width);
+        let expected = Line {
+            style: Style::new(),
+            alignment: None,
+            spans: vec![
+                Span::from(exp_state).style(exp_color),
+                Span::from("   "),
+                Span::from(exp_path).fg(Color::Reset),
+            ],
+        };
+        assert_eq!(expected, actual);
+    }
 }

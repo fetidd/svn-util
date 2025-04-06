@@ -38,7 +38,6 @@ pub enum AppEvent {
     UpdateRequest,
     ConflictsScroll(Direction),
     ChangesScroll(Direction),
-    ToggleSelectedSection,
     DeselectSection,
     NextChange,
     PrevChange,
