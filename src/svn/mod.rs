@@ -10,42 +10,61 @@ pub use {
     filelist::FileList,
 };
 
-pub fn get_svn_status(path: &PathBuf) -> Result<String> {
-    run_command("svn", &["status", path.to_str().expect("bad path")]).map(|res| {
-        if res.success() {
-            Ok(res.output().into())
-        } else {
-            Err(Error::from(res.output()))
+pub fn svn_revert(path: &PathBuf) -> Result<()> {
+    run_command("svn", &["revert", &path.to_string_lossy()])?;
+    Ok(())
+}
+
+pub fn svn_delete(path: &PathBuf) -> Result<()> {
+    run_command("svn", &["remove", &path.to_string_lossy()])?;
+    Ok(())
+}
+
+pub fn svn_add(path: &PathBuf) -> Result<()> {
+    run_command("svn", &["add", &path.to_string_lossy()])?;
+    Ok(())
+}
+
+pub fn svn_commit(path: &PathBuf) -> Result<()> {
+    run_command("svn", &["commit", &path.to_string_lossy()])?;
+    Ok(())
+}
+
+pub fn parse_branch_name(svn_info: &str) -> Result<String> {
+    for line in svn_info.lines() {
+        if line.starts_with("URL:") {
+            // find the branch name part
+            let path = PathBuf::from(&line[5..]);
+            let branch_name = path
+                .file_name()
+                .expect("branch url ended in ..")
+                .to_str()
+                .expect("branch url was invalid utf-8!")
+                .to_string();
+
+            return Ok(branch_name);
         }
-    })?
+    }
+    Err(Error::BranchParseFailure)
 }
 
 pub fn get_branch_name(path: &PathBuf) -> Result<String> {
-    let res = run_command("svn", &["info", path.to_str().expect("bad path")])?;
+    let res = run_command("svn", &["info", &path.to_string_lossy()])?;
     match res.success() {
-        true => {
-            let svn_info = res.output();
-            for line in svn_info.lines() {
-                if line.starts_with("URL:") {
-                    // find the branch name part
-                    let path = PathBuf::from(&line[5..]);
-                    let branch_name = path
-                        .file_name()
-                        .expect("branch url ended in ..")
-                        .to_str()
-                        .expect("branch url was invalid utf-8!")
-                        .to_string();
-
-                    return Ok(branch_name);
-                }
-            }
-            Err(Error::BranchParseFailure)
-        }
+        true => parse_branch_name(res.output()),
         false => Err(Error::from(res.output())),
     }
 }
 
 pub type ParsedStatusLine = (State, PathBuf);
+
+pub fn get_svn_status(path: &PathBuf) -> Result<Vec<ParsedStatusLine>> {
+    let res = run_command("svn", &["status", &path.to_string_lossy()])?;
+    match res.success() {
+        true => parse_svn_status(res.output()),
+        false => Err(Error::from(res.output())),
+    }
+}
 
 fn parse_status_line(status_line: &str) -> Result<ParsedStatusLine> {
     let (status, path) = status_line.split_at(8);

@@ -33,18 +33,15 @@ pub struct App {
     /// The current working directory
     cwd: PathBuf,
     changes_scrollbar_state: ScrollbarState,
-    conflicts_scrollbar_state: ScrollbarState,
-    conflicts_scroll_offset: usize,
-    selected_section: Option<AppSection>,
     // UI areas mainly used for mouse clicks etc.
     changes_area: Option<Rect>,
-    conflicts_area: Option<Rect>,
     change_popup_area: Option<Rect>,
     config: Config,
     mouse_loc: (u16, u16), // row, col
     state: AppState,
-
+    has_focus: bool,
     last_message: String,
+    buttons: Vec<(Rect, fn(&mut App))>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -65,7 +62,6 @@ impl App {
         let file_list = svn::FileList::empty();
         let list_state = ListState::default().with_selected(Some(0));
         let changes_scrollbar_state = ScrollbarState::default();
-        let conflicts_scrollbar_state = ScrollbarState::default();
         Self {
             running: true,
             events: EventHandler::new(),
@@ -75,16 +71,14 @@ impl App {
             cwd: PathBuf::new(),
             list_state,
             changes_scrollbar_state,
-            conflicts_scrollbar_state,
-            conflicts_scroll_offset: 0,
-            selected_section: None,
             changes_area: None,
-            conflicts_area: None,
             config: Config::default(),
             mouse_loc: (0, 0),
             state: AppState::Main,
             change_popup_area: None,
             last_message: String::new(),
+            has_focus: true,
+            buttons: vec![],
         }
     }
 
@@ -101,10 +95,9 @@ impl App {
             Err(e) => panic!("Issue in App creation: {e}"),
         };
         if let Ok(status) = svn::get_svn_status(&cwd) {
-            self.file_list
-                .populate_from_svn_status(&status)
-                .expect("failed to populate from svn status");
+            *self.file_list.list_mut() = status;
         }
+        self.cwd = cwd;
         while self.running {
             terminal.draw(|frame| self.draw(frame))?;
             self.handle_events()?;
@@ -120,12 +113,13 @@ impl App {
                 CtEvent::Mouse(mouse_event) => self.handle_mouse_event(mouse_event)?,
                 CtEvent::FocusLost => {
                     self.close_change_popup();
-                    self.selected_section = None;
                     *self.list_state.selected_mut() = None;
+                    self.has_focus = false;
                 }
                 CtEvent::FocusGained => {
                     self.update_branch_name();
                     self.update_svn_status();
+                    self.has_focus = true;
                 }
                 _ => {}
             },
@@ -135,17 +129,6 @@ impl App {
                     self.update_branch_name();
                     self.update_svn_status();
                 }
-                AppEvent::ConflictsScroll(dir) => handle_scroll(
-                    &dir,
-                    &mut self.conflicts_scroll_offset,
-                    &mut self.conflicts_scrollbar_state,
-                ),
-                AppEvent::ChangesScroll(dir) => handle_scroll(
-                    &dir,
-                    self.list_state.offset_mut(),
-                    &mut self.changes_scrollbar_state,
-                ),
-                AppEvent::DeselectSection => self.selected_section = None,
                 AppEvent::NextChange => self.list_state.select_next(),
                 AppEvent::PrevChange => self.list_state.select_previous(),
                 AppEvent::SelectChange => self.state = AppState::ChangePopup,
@@ -164,20 +147,6 @@ impl App {
                 self.events.send(AppEvent::Quit)
             }
             KeyCode::Char('r' | 'R') => self.events.send(AppEvent::UpdateRequest),
-            KeyCode::Up => match self.selected_section {
-                Some(AppSection::Conflicts) => {
-                    self.events.send(AppEvent::ConflictsScroll(Direction::Up))
-                }
-                Some(AppSection::Changes) => self.events.send(AppEvent::PrevChange),
-                _ => {}
-            },
-            KeyCode::Down => match self.selected_section {
-                Some(AppSection::Conflicts) => {
-                    self.events.send(AppEvent::ConflictsScroll(Direction::Down))
-                }
-                Some(AppSection::Changes) => self.events.send(AppEvent::NextChange),
-                _ => {}
-            },
             _ => {}
         }
         Ok(())
@@ -212,8 +181,9 @@ impl App {
 
     fn update_svn_status(&mut self) {
         // TODO error popup here?
-        if let Ok(status) = svn::get_svn_status(&self.cwd) {
-            let _ = self.file_list.populate_from_svn_status(&status);
+        match svn::get_svn_status(&self.cwd) {
+            Ok(status) => *self.file_list.list_mut() = status,
+            Err(error) => self.events.send(AppEvent::Message(error.to_string())),
         }
         self.last_updated = Utc::now();
     }
@@ -227,10 +197,6 @@ impl App {
 
     /// Handles any mouse clicks within the UI.
     fn handle_click(&mut self, button: MouseButton) {
-        self.events.send(AppEvent::Message(format!(
-            "{:?} {:?} {:?}",
-            self.state, self.selected_section, self.mouse_loc
-        )));
         let section = self.current_mouse_section();
         match section {
             Some(AppSection::Changes) => {
@@ -255,13 +221,26 @@ impl App {
                     }
                 }
             }
-            Some(AppSection::ChangePopup) => {}
+            Some(AppSection::ChangePopup) => {
+                let pos = Position {
+                    // TODO make App.mouse_loc a Position
+                    x: self.mouse_loc.1,
+                    y: self.mouse_loc.0,
+                };
+                if let Some(func) = self.buttons.iter().fold(None, |mut a, (rect, func)| {
+                    if rect.contains(pos) {
+                        a = Some(func);
+                    }
+                    a
+                }) {
+                    func(self);
+                }
+            }
             _ => {
                 *self.list_state.selected_mut() = None;
                 self.close_change_popup();
             }
         }
-        self.selected_section = section;
     }
 
     fn close_change_popup(&mut self) {
@@ -284,11 +263,6 @@ impl App {
                     handle_scroll(&dir, selected, &mut self.changes_scrollbar_state)
                 }
             }
-            Some(AppSection::Conflicts) => handle_scroll(
-                &dir,
-                &mut self.conflicts_scroll_offset,
-                &mut self.conflicts_scrollbar_state,
-            ),
             _ => {}
         }
     }
@@ -299,7 +273,6 @@ impl App {
             // as the rects for each section are still Some(_) even wh en popups are above them
             (self.change_popup_area, AppSection::ChangePopup),
             (self.changes_area, AppSection::Changes),
-            (self.conflicts_area, AppSection::Conflicts),
         ] {
             if let Some(area) = area {
                 let pos = Position {
@@ -315,6 +288,36 @@ impl App {
     }
 
     fn handle_mouse_move(&mut self) {}
+
+    fn open_change_file(&mut self) {
+        self.events.send(AppEvent::Message("open".into()))
+    }
+
+    fn perform_svn_function(&mut self, func: fn(&PathBuf) -> svn::error::Result<()>) {
+        if let Some((_, path)) = self.get_selected_change() {
+            if let Err(error) = func(path) {
+                self.events.send(AppEvent::Message(error.to_string()));
+            } else {
+                self.update_svn_status();
+            }
+        }
+    }
+
+    fn delete_change_file(&mut self) {
+        self.perform_svn_function(svn::svn_delete);
+    }
+
+    fn add_change_file(&mut self) {
+        self.perform_svn_function(svn::svn_add);
+    }
+
+    fn revert_change_file(&mut self) {
+        self.perform_svn_function(svn::svn_revert);
+    }
+
+    fn commit_change_file(&mut self) {
+        self.perform_svn_function(svn::svn_commit);
+    }
 }
 
 fn handle_scroll(dir: &Direction, offset: &mut usize, bar_state: &mut ScrollbarState) {
@@ -333,7 +336,6 @@ fn time_for_update(last_updated: DateTime<Utc>, timeout: u8) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AppSection {
     Changes,
-    Conflicts,
     ChangePopup,
 }
 
@@ -372,7 +374,7 @@ mod tests {
 
         a.mouse_loc = (3, 0);
         a.handle_click(MouseButton::Left);
-        a.handle_events();
+        a.handle_events().unwrap();
 
         assert_eq!(a.state, AppState::Main);
         assert_eq!(a.change_popup_area, None);
@@ -412,21 +414,18 @@ mod tests {
     }
 
     #[rstest]
-    #[case(Some(rect(0)), None, None, (0, 0), Some(AppSection::Changes))]
-    #[case(None, Some(rect(1)), None, (1, 1), Some(AppSection::Conflicts))]
-    #[case(None, None, Some(rect(2)), (2, 2), Some(AppSection::ChangePopup))]
-    #[case(Some(rect(0)), None, Some(rect(0)), (0, 0), Some(AppSection::ChangePopup))]
-    #[case(Some(rect(0)), Some(rect(1)), Some(rect(2)), (3, 3), None)]
+    #[case(Some(rect(0)), None, (0, 0), Some(AppSection::Changes))]
+    #[case(None, Some(rect(2)), (2, 2), Some(AppSection::ChangePopup))]
+    #[case(Some(rect(0)), Some(rect(0)), (0, 0), Some(AppSection::ChangePopup))]
+    #[case(Some(rect(0)), Some(rect(2)), (3, 3), None)]
     fn test_current_mouse_section(
         #[case] changes: Option<Rect>,
-        #[case] conflicts: Option<Rect>,
         #[case] change_popup: Option<Rect>,
         #[case] loc: (u16, u16),
         #[case] expected: Option<AppSection>,
     ) {
         let mut a = App::new();
         a.changes_area = changes;
-        a.conflicts_area = conflicts;
         a.change_popup_area = change_popup;
         a.mouse_loc = loc;
         assert_eq!(expected, a.current_mouse_section());

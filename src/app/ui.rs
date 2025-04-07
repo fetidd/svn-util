@@ -5,11 +5,11 @@ use ratatui::{
     text::{Line, Span, Text},
     widgets::{Block, Clear, List, Paragraph, Scrollbar, ScrollbarOrientation},
 };
-use std::{ffi::OsStr, path::PathBuf};
+use std::ffi::OsStr;
 
 use crate::{
-    app::{App, AppSection, AppState},
-    svn::{self, Conflict, ParsedStatusLine, state::State},
+    app::{App, AppState},
+    svn::{self, ParsedStatusLine, state::State},
 };
 
 const MINIMUM_UI_WIDTH: u16 = 15;
@@ -21,30 +21,18 @@ impl App {
             frame.render_widget(Span::raw("too small"), frame.area());
             return;
         }
-        let should_render_conflicts: bool = self.file_list.has_conflicts()
-            && self
-                .get_selected_change()
-                .as_ref()
-                .is_some_and(|change| change.0 == State::Conflicting);
         let should_render_change_popup = self.state == AppState::ChangePopup;
-        let mut constraints = vec![
+        let constraints = vec![
             Constraint::Length(4),
             Constraint::Fill(1),
             Constraint::Length(1),
         ];
-        if should_render_conflicts {
-            constraints.insert(2, Constraint::Percentage(20));
-        }
         let layout = Layout::vertical(constraints).split(frame.area());
         let mut i = 0;
         self.render_branch_box(frame, layout[i]);
         i += 1;
         self.render_file_list(frame, layout[i]);
         i += 1;
-        if should_render_conflicts {
-            self.render_conflicts(frame, layout[i]);
-            i += 1;
-        }
         if should_render_change_popup {
             self.render_change_popup(frame);
         }
@@ -58,7 +46,7 @@ impl App {
             .map(|b| b.to_string().len()) // TODO this allocates String for each button, maybe have the list items know their lengths?
             .max()
             .expect("buttons was somehow empty?")
-            + 3) as u16; // 3 is some padding at the end
+            + 6) as u16;
         let height = buttons.len() as u16;
         if col + width >= allowed_area.width {
             col = col.saturating_sub((col + width) - allowed_area.width);
@@ -72,73 +60,47 @@ impl App {
     }
 
     fn render_change_popup(&mut self, frame: &mut Frame) {
-        self.selected_section = Some(AppSection::ChangePopup);
         let (state, _) = self
             .get_selected_change()
             .expect("Somehow opened a changed popup without a selected change?!");
         let popup = Block::new().bg(Color::DarkGray);
         let button = |title: &'static str, color: Color| Text::raw(title).style(color);
-        let mut buttons = vec![button("Open", Color::LightBlue)];
+        let mut btn_widgets = vec![button("Open", Color::LightBlue)];
+        let mut btn_funcs = vec![App::open_change_file as fn(&mut App)];
         if state.is_deletable() {
-            buttons.push(button("Delete", Color::LightRed));
+            btn_widgets.push(button("Delete", Color::LightRed));
+            btn_funcs.push(App::delete_change_file);
         }
         if state.is_revertable() {
-            buttons.push(button("Revert", Color::LightYellow));
+            btn_widgets.push(button("Revert", Color::LightYellow));
+            btn_funcs.push(App::revert_change_file);
         }
         if state.is_commitable() {
-            buttons.push(button("Commit", Color::LightGreen));
+            btn_widgets.push(button("Commit", Color::LightGreen));
+            btn_funcs.push(App::commit_change_file);
         }
-        let constraints = vec![Constraint::Length(3); buttons.len()];
+        if state.is_addable() {
+            btn_widgets.push(button("Add", Color::LightGreen));
+            btn_funcs.push(App::add_change_file);
+        }
+        let constraints = vec![Constraint::Length(3); btn_widgets.len()];
         let popup_area = self
             .change_popup_area
-            .unwrap_or(self.calculate_popup_rect(&buttons, frame.area()));
+            .unwrap_or(self.calculate_popup_rect(&btn_widgets, frame.area()));
         // RENDERING STARTS HERE
         frame.render_widget(Clear, popup_area); // clear the popup area
         let layout = Layout::vertical(constraints).split(popup_area.inner(Margin {
             horizontal: 1,
             vertical: 0,
         }));
-        for i in 0..buttons.len() {
-            frame.render_widget(
-                buttons.pop().expect("We somehow ran out of buttons?"),
-                layout[i],
-            );
+        let buttons = btn_widgets.into_iter().zip(btn_funcs);
+        for (i, (widget, func)) in buttons.into_iter().enumerate() {
+            let area = layout.get(i).expect("layout cannot fit the buttons");
+            frame.render_widget(widget, *area);
+            self.buttons.push((*area, func));
         }
         frame.render_widget(popup, popup_area);
         self.change_popup_area = Some(popup_area);
-    }
-
-    fn render_conflicts(&mut self, frame: &mut Frame, area: Rect) {
-        let conflicts = self.file_list.conflicts();
-        let max_width = area.width - 1 - 1 - 1; // 1 for state, 1 each side for block borders, 1 for scrollbar
-        let conflict_texts: Vec<Line> = conflicts
-            .iter()
-            .map(|c| transform_conflict(c, max_width))
-            .fold(vec![], |mut a, b| {
-                a.extend(b);
-                a
-            });
-        self.conflicts_scrollbar_state = self
-            .conflicts_scrollbar_state
-            .content_length(conflict_texts.len());
-        let mut block = Block::bordered().title("Conflicts");
-        if self.selected_section == Some(AppSection::Conflicts) {
-            block = block.style(Color::Yellow);
-        }
-        let paragraph = Paragraph::new(conflict_texts)
-            .block(block)
-            .scroll((self.conflicts_scroll_offset as u16, 0));
-        frame.render_widget(paragraph, area);
-        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight);
-        frame.render_stateful_widget(
-            scrollbar,
-            area.inner(Margin {
-                horizontal: 0,
-                vertical: 1,
-            }),
-            &mut self.conflicts_scrollbar_state,
-        );
-        self.conflicts_area = Some(area);
     }
 
     fn render_branch_box(&self, frame: &mut Frame, area: Rect) {
@@ -153,10 +115,7 @@ impl App {
 
     fn render_file_list(&mut self, frame: &mut Frame, area: Rect) {
         let max_width = area.width - 3; // 1 each side for block borders, 1 for scrollbar
-        let mut block = Block::bordered().title("Changes");
-        if self.selected_section == Some(AppSection::Changes) {
-            block = block.style(Color::Yellow);
-        }
+        let block = Block::bordered().title("Changes");
         let list = List::new(
             self.file_list
                 .list()
@@ -195,33 +154,33 @@ impl App {
     }
 }
 
-fn transform_conflict<'a>(conflict: &'a Conflict, max_width: u16) -> Vec<Line<'a>> {
-    let make_line = |p: &'a PathBuf, color: Color| {
-        let mut text = p.to_str().expect("bad path").to_string();
-        if text.len() as u16 > max_width {
-            text = text.split_at(max_width as usize - 3).0.to_string();
-            text.push_str("...");
-        }
-        Line::raw(text).style(color)
-    };
-    match conflict {
-        Conflict::Text {
-            file,
-            left,
-            right,
-            working,
-        } => match (left, right, working) {
-            (Some(l), Some(r), Some(w)) => vec![
-                make_line(file, Color::Magenta),
-                make_line(l, Color::DarkGray),
-                make_line(w, Color::DarkGray),
-                make_line(r, Color::DarkGray),
-                Line::raw(""),
-            ],
-            _ => panic!("can there even be a conflict without all 3 parts?"),
-        },
-    }
-}
+// fn transform_conflict<'a>(conflict: &'a Conflict, max_width: u16) -> Vec<Line<'a>> {
+//     let make_line = |p: &'a PathBuf, color: Color| {
+//         let mut text = p.to_str().expect("bad path").to_string();
+//         if text.len() as u16 > max_width {
+//             text = text.split_at(max_width as usize - 3).0.to_string();
+//             text.push_str("...");
+//         }
+//         Line::raw(text).style(color)
+//     };
+//     match conflict {
+//         Conflict::Text {
+//             file,
+//             left,
+//             right,
+//             working,
+//         } => match (left, right, working) {
+//             (Some(l), Some(r), Some(w)) => vec![
+//                 make_line(file, Color::Magenta),
+//                 make_line(l, Color::DarkGray),
+//                 make_line(w, Color::DarkGray),
+//                 make_line(r, Color::DarkGray),
+//                 Line::raw(""),
+//             ],
+//             _ => panic!("can there even be a conflict without all 3 parts?"),
+//         },
+//     }
+// }
 
 /// Errors from PathBuf transformations are shown inline in the list view
 fn create_file_list_item<'a>((state, path): &'a ParsedStatusLine, max_width: u16) -> Line<'a> {

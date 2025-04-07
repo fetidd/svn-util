@@ -36,9 +36,6 @@ pub enum AppEvent {
     /// Quit the application.
     Quit,
     UpdateRequest,
-    ConflictsScroll(Direction),
-    ChangesScroll(Direction),
-    DeselectSection,
     NextChange,
     PrevChange,
     SelectChange,

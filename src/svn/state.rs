@@ -13,14 +13,14 @@ pub enum State {
 }
 
 impl State {
-    pub(crate) fn is_commitable(&self) -> bool {
+    pub fn is_commitable(&self) -> bool {
         match self {
             State::Modified | State::Added | State::Deleted => true,
             _ => false,
         }
     }
 
-    pub(crate) fn is_revertable(&self) -> bool {
+    pub fn is_revertable(&self) -> bool {
         match self {
             State::Modified
             | State::Added
@@ -31,9 +31,16 @@ impl State {
         }
     }
 
-    pub(crate) fn is_deletable(&self) -> bool {
+    pub fn is_deletable(&self) -> bool {
         match self {
             State::Modified | State::Missing | State::Conflicting => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_addable(&self) -> bool {
+        match self {
+            State::Unversioned => true,
             _ => false,
         }
     }
