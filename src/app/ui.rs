@@ -60,26 +60,27 @@ impl App {
     }
 
     fn render_change_popup(&mut self, frame: &mut Frame) {
-        let (state, _) = self
-            .get_selected_change()
-            .expect("Somehow opened a changed popup without a selected change?!");
+        let selected = match self.get_selected_changes() {
+            Some(selected) if !selected.is_empty() => selected,
+            _ => return,
+        };
         let popup = Block::new().bg(Color::DarkGray);
         let button = |title: &'static str, color: Color| Text::raw(title).style(color);
         let mut btn_widgets = vec![button("Open", Color::LightBlue)];
         let mut btn_funcs = vec![App::open_change_file as fn(&mut App)];
-        if state.is_deletable() {
+        if selected.iter().all(|(state, _)| state.is_deletable()) {
             btn_widgets.push(button("Delete", Color::LightRed));
             btn_funcs.push(App::delete_change_file);
         }
-        if state.is_revertable() {
+        if selected.iter().all(|(state, _)| state.is_revertable()) {
             btn_widgets.push(button("Revert", Color::LightYellow));
             btn_funcs.push(App::revert_change_file);
         }
-        if state.is_commitable() {
+        if selected.iter().all(|(state, _)| state.is_commitable()) {
             btn_widgets.push(button("Commit", Color::LightGreen));
             btn_funcs.push(App::commit_change_file);
         }
-        if state.is_addable() {
+        if selected.iter().all(|(state, _)| state.is_addable()) {
             btn_widgets.push(button("Add", Color::LightGreen));
             btn_funcs.push(App::add_change_file);
         }

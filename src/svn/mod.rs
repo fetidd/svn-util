@@ -2,6 +2,8 @@ pub mod error;
 pub mod filelist;
 pub mod filetree;
 pub mod state;
+use crate::command::CmdResult;
+
 use super::command::run_command;
 use state::State;
 use std::{path::PathBuf, str::FromStr};
@@ -10,24 +12,28 @@ pub use {
     filelist::FileList,
 };
 
-pub fn svn_revert(path: &PathBuf) -> Result<()> {
-    run_command("svn", &["revert", &path.to_string_lossy()])?;
-    Ok(())
+pub fn svn_revert(paths: &[&str]) -> Result<CmdResult> {
+    let mut args = vec!["revert"];
+    args.extend_from_slice(&paths);
+    run_command("svn", &args).map_err(Error::from)
 }
 
-pub fn svn_delete(path: &PathBuf) -> Result<()> {
-    run_command("svn", &["remove", &path.to_string_lossy()])?;
-    Ok(())
+pub fn svn_delete(paths: &[&str]) -> Result<CmdResult> {
+    let mut args = vec!["remove"];
+    args.extend_from_slice(&paths);
+    run_command("svn", &args).map_err(Error::from)
 }
 
-pub fn svn_add(path: &PathBuf) -> Result<()> {
-    run_command("svn", &["add", &path.to_string_lossy()])?;
-    Ok(())
+pub fn svn_add(paths: &[&str]) -> Result<CmdResult> {
+    let mut args = vec!["add"];
+    args.extend_from_slice(&paths);
+    run_command("svn", &args).map_err(Error::from)
 }
 
-pub fn svn_commit(path: &PathBuf) -> Result<()> {
-    run_command("svn", &["commit", &path.to_string_lossy()])?;
-    Ok(())
+pub fn svn_commit(paths: &[&str]) -> Result<CmdResult> {
+    let mut args = vec!["commit"];
+    args.extend_from_slice(&paths);
+    run_command("svn", &args).map_err(Error::from)
 }
 
 pub fn parse_branch_name(svn_info: &str) -> Result<String> {

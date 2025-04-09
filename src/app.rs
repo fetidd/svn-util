@@ -1,8 +1,6 @@
 mod ui;
-
-use std::path::PathBuf;
-
 use crate::{
+    command::{CmdResult, run_command},
     config::Config,
     event::{AppEvent, Direction, Event, EventHandler},
     svn::{self, ParsedStatusLine},
@@ -15,6 +13,7 @@ use ratatui::{
     layout::{Position, Rect},
     widgets::{ListState, ScrollbarState},
 };
+use std::path::PathBuf;
 
 #[derive(Debug)]
 pub struct App {
@@ -42,6 +41,7 @@ pub struct App {
     has_focus: bool,
     last_message: String,
     buttons: Vec<(Rect, fn(&mut App))>,
+    _multiselection: Option<Vec<usize>>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -60,7 +60,7 @@ impl App {
     /// Constructs a new instance of [`App`].
     pub fn new() -> Self {
         let file_list = svn::FileList::empty();
-        let list_state = ListState::default().with_selected(Some(0));
+        let list_state = ListState::default();
         let changes_scrollbar_state = ScrollbarState::default();
         Self {
             running: true,
@@ -79,6 +79,7 @@ impl App {
             last_message: String::new(),
             has_focus: true,
             buttons: vec![],
+            _multiselection: None,
         }
     }
 
@@ -235,6 +236,7 @@ impl App {
                 }) {
                     func(self);
                 }
+                self.close_change_popup();
             }
             _ => {
                 *self.list_state.selected_mut() = None;
@@ -248,9 +250,13 @@ impl App {
         self.change_popup_area = None;
     }
 
-    fn get_selected_change(&self) -> Option<&ParsedStatusLine> {
+    fn get_selected_changes(&self) -> Option<Vec<&ParsedStatusLine>> {
         if let Some(index) = self.list_state.selected() {
-            self.file_list.get(index)
+            if let Some(change) = self.file_list.get(index) {
+                Some(vec![change])
+            } else {
+                None
+            }
         } else {
             None
         }
@@ -289,16 +295,19 @@ impl App {
 
     fn handle_mouse_move(&mut self) {}
 
-    fn open_change_file(&mut self) {
-        self.events.send(AppEvent::Message("open".into()))
-    }
-
-    fn perform_svn_function(&mut self, func: fn(&PathBuf) -> svn::error::Result<()>) {
-        if let Some((_, path)) = self.get_selected_change() {
-            if let Err(error) = func(path) {
-                self.events.send(AppEvent::Message(error.to_string()));
-            } else {
-                self.update_svn_status();
+    fn perform_svn_function(&mut self, func: fn(&[&str]) -> svn::error::Result<CmdResult>) {
+        if let Some(selected) = self.get_selected_changes() {
+            let paths = selected.into_iter().fold(vec![], |mut a, b| {
+                a.push(b.1.to_string_lossy().to_string());
+                a
+            });
+            let path_strs: Vec<&str> = paths.iter().map(|s| s.as_ref()).collect();
+            match func(path_strs.as_slice()) {
+                Ok(res) if res.success() => self.update_svn_status(),
+                Ok(res) => self
+                    .events
+                    .send(AppEvent::Message(res.output().to_string())), // TODO delete reaches here when the file has modification, as svn requires --force to be passed, this could be used to have a "are you sure?" dialog
+                Err(e) => self.events.send(AppEvent::Message(e.to_string())),
             }
         }
     }
@@ -317,6 +326,38 @@ impl App {
 
     fn commit_change_file(&mut self) {
         self.perform_svn_function(svn::svn_commit);
+    }
+
+    fn open_change_file(&mut self) {
+        if let Some(selected) = self.get_selected_changes() {
+            if let Some((_, path)) = selected.first() {
+                match run_command(
+                    "zellij",
+                    vec![
+                        "edit",
+                        "-f",
+                        "--height",
+                        "70%",
+                        "--width",
+                        "70%",
+                        "-x",
+                        "15%",
+                        "-y",
+                        "15%",
+                        path.to_string_lossy().as_ref(),
+                    ]
+                    .as_slice(),
+                ) {
+                    Ok(res) => {
+                        if !res.success() {
+                            self.events
+                                .send(AppEvent::Message(res.output().to_string()))
+                        }
+                    }
+                    Err(e) => self.events.send(AppEvent::Message(e.to_string())),
+                }
+            }
+        }
     }
 }
 
@@ -379,7 +420,7 @@ mod tests {
         assert_eq!(a.state, AppState::Main);
         assert_eq!(a.change_popup_area, None);
         assert_eq!(a.list_state.selected(), Some(2));
-        assert_eq!(a.get_selected_change(), Some(&file_list[2]))
+        assert_eq!(a.get_selected_changes(), Some(vec![&file_list[2]]))
     }
 
     #[rstest]
